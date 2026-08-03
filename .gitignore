@@ -1,0 +1,27 @@
+# dependencies
+node_modules
+
+# next.js
+/.next/
+/out/
+
+# env
+.env
+.env*.local
+
+# misc
+.DS_Store
+*.pem
+*.tar
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# editor / local tooling
+.claude/
+*.local.html
+build.log
+install.log
+
+# stray files that pre-dated this repo (see README)
+claude-code-task-manifest.html
