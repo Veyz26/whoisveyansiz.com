@@ -1,15 +1,17 @@
 {
   "name": "whoisveyansiz.com",
   "version": "1.0.0",
-  "description": "Veyansiz Chetty — 3D space portfolio. Static site.",
+  "description": "Veyansiz Chetty \u2014 3D space portfolio. Static site.",
   "private": true,
   "author": "Veyansiz Chetty",
   "license": "MIT",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build && node scripts/copy-budget.mjs",
     "start": "next start",
-    "preview": "npx serve out"
+    "preview": "npx serve out",
+    "budget:dev": "sh budget/dev/serve.sh",
+    "budget:test": "php budget/tests/run.php && python3 budget/tests/parity.py"
   },
   "engines": {
     "node": ">=20"

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Volume2, VolumeX, Menu, X } from "lucide-react";
+import { Volume2, VolumeX, Menu, X, Lock } from "lucide-react";
 import { sections } from "./constants";
 import { useExperience } from "@/lib/experienceStore";
 import { useSpaceAudio, playUi } from "@/lib/spaceAudio";
@@ -57,6 +57,15 @@ export function TopBar() {
 
         {/* Right controls */}
         <div className="flex items-center gap-2">
+          {/* Private area: a separate PHP app at /private/, behind Microsoft sign-in. */}
+          <a
+            href="/private/"
+            aria-label="Private area (sign-in required)"
+            title="Private"
+            className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/50 transition-colors hover:text-white"
+          >
+            <Lock size={15} />
+          </a>
           <button
             onClick={toggle}
             aria-label={enabled ? "Mute ambient sound" : "Play ambient sound"}

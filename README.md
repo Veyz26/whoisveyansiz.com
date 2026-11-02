@@ -73,6 +73,16 @@ Push to `main` and let a GitHub Action FTP the `out/` folder up. In hPanel go to
 as repository secrets under **Settings → Secrets and variables → Actions**, then
 add `.github/workflows/deploy.yml`.
 
+## Private budget app (`/private/`)
+
+`budget/` holds a separate, self-contained PHP app served at `/private/` behind Face ID / Touch ID
+sign-in (passkeys; allowlisted emails only). The portfolio's top bar links to it with a lock icon. `npm run build` copies
+it into `out/private/`. Its config and database live outside `public_html`. See
+[budget/README.md](budget/README.md) for setup and tests.
+
+This is the one exception to "no server code": Hostinger runs the PHP under `/private/`, and the rest
+of the site stays static.
+
 ## What changed from the K8s version
 
 This repo replaces the old `K8Website` homelab deployment. Removed:

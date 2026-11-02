@@ -1,0 +1,2 @@
+# Defence in depth: the PHP source is never served directly.
+Require all denied

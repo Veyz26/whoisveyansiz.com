@@ -25,3 +25,11 @@ install.log
 
 # stray files that pre-dated this repo (see README)
 claude-code-task-manifest.html
+
+# private budget app: local config, databases and Python caches never get committed
+budget/dev/config.php
+budget/dev/data/
+*.db
+*.db-wal
+*.db-shm
+__pycache__/
