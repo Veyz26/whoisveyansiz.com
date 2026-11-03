@@ -1,0 +1,45 @@
+# Builds the static site (with the private budget app in out/private/) on every push to main
+# and commits the result to the `deploy` branch. Hostinger's Git deployment pulls that branch
+# into public_html. See "Deploying to Hostinger" in README.md.
+name: Build deploy branch
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Check the build
+        run: |
+          for f in out/index.html out/.htaccess out/private/index.php out/private/.htaccess out/private/app/.htaccess; do
+            test -f "$f" || { echo "missing $f"; exit 1; }
+          done
+          if find out -name 'config.php' -o -name '*.db' -o -name '*.log' | grep -q .; then
+            echo "config, database or log file in the build"; exit 1
+          fi
+
+      - name: Publish to the deploy branch
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: scripts/publish-deploy-branch.sh "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"

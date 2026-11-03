@@ -85,7 +85,8 @@ Microsoft sign-in is optional and off unless you add a `microsoft` block (see `d
 ### 2. Deploy
 
 1. In hPanel → **Advanced → PHP Configuration**, pick **PHP 8.3 or 8.4** (8.1 is the minimum).
-2. Run `npm run build`, then zip from the command line so the dotfiles come along:
+2. If Hostinger deploys from GitHub (Option B in the site README), merging into `main` publishes the app;
+   skip to step 4. Otherwise run `npm run build`, then zip from the command line so the dotfiles come along:
    `cd out && zip -r ../site.zip . && cd ..`
 3. In File Manager, move the old `public_html/private/` folder out of `public_html` (keep it until the new
    version checks out), upload `site.zip` to `public_html` and extract it. Make sure
