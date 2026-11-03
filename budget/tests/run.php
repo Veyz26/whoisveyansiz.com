@@ -143,6 +143,10 @@ check((bool)$db->val('SELECT 1 FROM users WHERE id = ?', [$b]), "other household
 $db = fresh();
 $base = 'https://whoisveyansiz.com/private';
 $u = Auth::signup($db, ['email' => 'veyz@example.test', 'name' => 'Veyz', 'password' => PW, 'setup_code' => 'VEYZ-CODE-1234', 'consents' => ['service' => true]]);
+check(Auth::lookup($db, ' VEYZ@example.test ') === ['next' => 'password', 'name' => 'Veyz'], 'email check: account without Face ID asks for the password');
+check(Auth::lookup($db, 'tiara@example.test') === ['next' => 'new'], 'email check: invited email without an account goes to setup');
+check(Auth::lookup($db, 'someone@else.test') === ['next' => 'not_invited'], 'email check: uninvited email learns nothing else');
+throws(fn() => Auth::lookup($db, 'not-an-email'), AuthError::class, 'email check rejects a malformed email', 'valid email');
 $phone = new FakeAuthenticator('whoisveyansiz.com', 'https://whoisveyansiz.com');
 $opts = Passkeys::register_options($db, $u, $base);
 check($opts['rp']['id'] === 'whoisveyansiz.com' && $opts['authenticatorSelection']['userVerification'] === 'required', 'registration asks for Face ID on this domain');
@@ -151,6 +155,7 @@ check(Passkeys::login_options($db, $base)['hints'] === ['client-device'], 'sign-
 check(strlen(Passkeys::unb64u($opts['user']['id'])) === 16 && $opts['user']['id'] === Passkeys::register_options($db, $u, $base)['user']['id'], 'user handle is a stable random 16-byte value, not the database id');
 $pkId = Passkeys::register_verify($db, $u, $phone->create($opts), $base, 'iPhone');
 check(Passkeys::count($db, $u) === 1 && $pkId > 0, 'passkey registered');
+check(Auth::lookup($db, 'veyz@example.test')['next'] === 'passkey', 'email check: account with Face ID offers Face ID');
 throws(fn() => Passkeys::register_verify($db, $u, $phone->create($opts), $base, 'again'), PasskeyError::class, 'registration challenge is single-use');
 
 // sign in
