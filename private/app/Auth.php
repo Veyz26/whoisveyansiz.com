@@ -217,7 +217,7 @@ final class Auth
         // Private mode: being on the allowlist isn't proof you own the address, so a password account
         // also needs the one-time setup code from config.php (an invite link or Microsoft sign-in is proof too).
         if (Config::get('private_mode') && empty($d['invite']) && !self::setup_code_ok($email, (string)($d['setup_code'] ?? ''))) {
-            throw new AuthError("That setup code isn't right. Ask the owner for the code for your email.");
+            throw new AuthError("That setup phrase isn't right. Ask the owner for it.");
         }
         if ($name === '') {
             throw new AuthError('Enter your name.');
