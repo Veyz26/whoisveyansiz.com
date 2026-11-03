@@ -177,6 +177,29 @@ final class Auth
         });
     }
 
+    /**
+     * Private mode's sign-in starts with the email: says what that person does next, so the page shows
+     * only that. Only invited emails get an answer beyond 'not_invited', and that list is just the household.
+     * @return array{next: string, name?: string}  next: not_invited | new | password | passkey | microsoft
+     */
+    public static function lookup(Conn $db, string $email): array
+    {
+        $email = strtolower(trim($email));
+        if (!preg_match('/^[^@\s]{1,64}@[^@\s]{1,190}\.[A-Za-z]{2,}$/', $email)) {
+            throw new AuthError('Enter a valid email address.');
+        }
+        if (!self::email_allowed($email)) {
+            return ['next' => 'not_invited'];
+        }
+        $u = $db->one('SELECT id, name, password_hash FROM users WHERE email = ?', [$email]);
+        if (!$u) {
+            return ['next' => Config::get('password_login') ? 'new' : 'microsoft'];
+        }
+        $first = explode(' ', trim((string)$u['name']))[0];
+        $next = Passkeys::count($db, (int)$u['id']) > 0 ? 'passkey' : ($u['password_hash'] && Config::get('password_login') ? 'password' : 'microsoft');
+        return ['next' => $next, 'name' => $first];
+    }
+
     public static function signup(Conn $db, array $d): int
     {
         $email = strtolower(trim((string)($d['email'] ?? '')));

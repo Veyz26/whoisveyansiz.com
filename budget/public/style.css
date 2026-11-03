@@ -168,6 +168,48 @@ label.field { display: grid; gap: 6px; font-size: 13px; color: var(--text-2); fo
 .auth form { display: grid; gap: 14px; margin-top: 22px; }
 .consents { display: grid; gap: 10px; padding: 14px; background: var(--surface-2); border-radius: var(--radius-sm); border: 1px solid var(--border); }
 .error { color: var(--warn); font-size: 14px; min-height: 0; }
+
+/* Sign-in card (private mode): one short step at a time. */
+.auth:has(.step) { max-width: 410px; padding: 30px 30px 26px; border-radius: 24px; box-shadow: 0 1px 0 rgb(255 255 255 / .04) inset, 0 30px 70px -36px rgb(40 26 16 / .45); }
+.auth .step { display: grid; animation: step-in .32s var(--ease) both; }
+@keyframes step-in { from { opacity: 0; transform: translateY(6px); } }
+.auth .step > .chip { justify-self: start; margin-bottom: 14px; }
+.auth .step h1 { font-size: 34px; line-height: 1.1; margin: 0 0 6px; }
+.auth .step .lead { margin: 0 0 22px; font-size: 15px; }
+.auth .step form { margin-top: 0; gap: 14px; }
+.auth .step .or { margin: 18px 0; }
+.auth .step .error:not(:empty) { margin-top: 12px; line-height: 1.45; }
+.auth .step .foot { margin: 18px 0 0; text-align: center; font-size: 13px; color: var(--muted); }
+.btn.xl { width: 100%; justify-content: center; min-height: 50px; padding: 12px 18px; font-size: 15.5px; font-weight: 500; border-radius: 14px; }
+.btn.xl svg { width: 20px; height: 20px; }
+.btn.xl.ms { margin-top: 12px; }
+.auth .step input:not([type=checkbox]) { min-height: 48px; border-radius: 12px; font-size: 16px; }  /* 16px stops iOS zooming in */
+.inline-form { display: grid !important; grid-template-columns: 1fr auto; gap: 8px !important; }
+.icon-btn { width: 48px; min-height: 48px; padding: 0; justify-content: center; border-radius: 12px; }
+.icon-btn svg { width: 20px; height: 20px; }
+.who { justify-self: start; display: inline-flex; align-items: center; gap: 9px; max-width: 100%; margin: 0 0 16px; padding: 4px 12px 4px 4px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); color: var(--text-2); font: inherit; font-size: 13px; cursor: pointer; }
+.who:hover { border-color: var(--border-strong); }
+.who .avatar { flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--ink); color: var(--ink-text); font-weight: 600; font-size: 12px; }
+.who-email { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.who-change { flex: none; color: var(--accent); }
+.alt { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+.alt summary { display: flex; justify-content: space-between; cursor: pointer; list-style: none; color: var(--text-2); font-size: 14px; }
+.alt summary::-webkit-details-marker { display: none; }
+.alt summary::after { content: "+"; color: var(--muted); }
+.alt[open] summary::after { content: "\2013"; }
+.alt > p { margin: 10px 0 14px; }
+.pw { position: relative; display: block; }
+.pw input { padding-right: 66px; }
+.pw-toggle { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); border: 0; background: none; color: var(--accent); font: inherit; font-size: 13px; padding: 8px; cursor: pointer; }
+.auth .hint { font-weight: 400; color: var(--muted); font-size: 12.5px; }
+.auth input[name=setup_code], .auth input[name=recovery] { text-transform: uppercase; letter-spacing: .08em; }
+.auth input[name=setup_code]::placeholder, .auth input[name=recovery]::placeholder { letter-spacing: .08em; }
+@media (prefers-reduced-motion: reduce) { .auth .step { animation: none; } }
+@media (max-width: 480px) {
+  .auth:has(.step) { padding: 26px 20px 22px; border-radius: 20px; } .auth .step h1 { font-size: 30px; }
+  .pub-nav { gap: 12px; } .pub-nav .brand, .pub-nav .btn { white-space: nowrap; } .pub-nav .btn.ghost { padding: 6px 4px; font-size: 13px; }
+}
 .doc { max-width: 760px; margin: 0 auto; padding: 20px 40px 80px; }
 .doc h1 { margin-bottom: 10px; } .doc h2 { margin-top: 30px; font-size: 21px; }
 .doc p, .doc li { color: var(--text-2); }
