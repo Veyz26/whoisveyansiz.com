@@ -49,9 +49,9 @@ throws(fn() => Auth::signup($db, ['email' => 'stranger@example.test', 'name' => 
 throws(fn() => Auth::signup($db, ['email' => 'veyz@example.test', 'name' => 'Veyz', 'password' => PW, 'consents' => []]),
     AuthError::class, 'signup needs the service consent');
 throws(fn() => Auth::signup($db, ['email' => 'veyz@example.test', 'name' => 'Veyz', 'password' => PW, 'consents' => ['service' => true]]),
-    AuthError::class, 'allow-listed signup without the setup code is refused', 'setup code');
+    AuthError::class, 'allow-listed signup without the setup code is refused', 'setup phrase');
 throws(fn() => Auth::signup($db, ['email' => 'veyz@example.test', 'name' => 'Veyz', 'password' => PW, 'setup_code' => 'TIARA-CODE-5678', 'consents' => ['service' => true]]),
-    AuthError::class, "someone else's setup code is refused", 'setup code');
+    AuthError::class, "someone else's setup code is refused", 'setup phrase');
 $v = Auth::signup($db, ['email' => 'Veyz@Example.test', 'name' => 'Veyz', 'partner_name' => 'Tiara', 'password' => PW, 'setup_code' => 'veyz code 1234', 'consents' => ['service' => true]]);
 check($v > 0, 'setup code accepted regardless of case, spaces and dashes');
 $hid = (int)$db->val('SELECT household_id FROM memberships WHERE user_id = ?', [$v]);

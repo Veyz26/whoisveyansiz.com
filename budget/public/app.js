@@ -319,8 +319,8 @@ function authStep(step, ctx = {}) {
       <p class="muted lead">You're on the invite list. Next you'll add Face ID.</p>
       <form id="f">${user}
         <label class="field">Your name<input type="text" name="name" autocomplete="given-name" maxlength="60" required></label>
-        <label class="field">Setup code<input type="text" name="setup_code" autocomplete="one-time-code" placeholder="XXXX-XXXX-XXXX" spellcheck="false" autocapitalize="characters" required>
-          <span class="hint">From the owner. Each email has its own.</span></label>
+        <label class="field">Setup phrase<input type="text" name="setup_code" autocomplete="off" placeholder="From the owner" spellcheck="false" autocapitalize="off" autocorrect="off" required>
+          <span class="hint">Capitals and spaces don't matter.</span></label>
         ${pwField("new-password")}
         <label class="check"><input type="checkbox" name="service" required> <span>I agree to the <a href="#/privacy" target="_blank">privacy notice</a>.</span></label>
         <button class="btn primary xl">Create account</button></form>`,
@@ -427,7 +427,7 @@ function signup(parts) {
       <label class="field">Your name <input type="text" name="name" autocomplete="given-name" required maxlength="60"></label>
       ${invite || S.config.private_mode ? "" : `<label class="field">Partner's name <span class="muted" style="font-weight:400">(optional, adds them to the budget)</span><input type="text" name="partner" maxlength="40"></label>`}
       <label class="field">Email <input type="email" name="email" autocomplete="email" required></label>
-      ${S.config.private_mode && !invite ? `<label class="field">Setup code <span class="muted" style="font-weight:400">(from the owner)</span><input type="text" name="setup_code" autocomplete="one-time-code" spellcheck="false" required></label>` : ""}
+      ${S.config.private_mode && !invite ? `<label class="field">Setup phrase <span class="muted" style="font-weight:400">(from the owner)</span><input type="text" name="setup_code" autocomplete="one-time-code" spellcheck="false" required></label>` : ""}
       <label class="field">Password <input type="password" name="password" autocomplete="new-password" minlength="10" required>
         <span class="small muted" style="font-weight:400">At least 10 characters.</span></label>
       <div class="consents">
