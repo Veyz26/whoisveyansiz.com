@@ -149,6 +149,14 @@ Details:
   - Layouts respect the notch and the home indicator.
 - **Icons:** in `public/icons/`. To change the design, edit `icon.svg` and re-export the PNGs (180, 192,
   512).
+- **3D:** `public/scene3d.js` draws the glass jars on Overview (one per person: height is money in,
+  layers are Essentials, Lifestyle, Savings and Transfers, clear glass is what's left) and the floating
+  coins behind the sign-in screens. It loads three.js from `public/vendor/three/` (copied from the
+  site's `node_modules/three`, MIT licence alongside) only on those screens, because the app's security
+  policy allows scripts from its own domain only. Scenes pause when off screen or in the background,
+  hold still with Reduce Motion on, and fall back to the regular cards where WebGL isn't available.
+  Jar colours are the `--jar-*` tokens in `style.css` (separate light and dark sets, checked for
+  colour-blind separation).
 
 ## Security and POPIA notes
 

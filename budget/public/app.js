@@ -128,6 +128,7 @@ addEventListener("hashchange", route);
 
 async function route() {
   closeOverlays(); hideTip();
+  S.fx?.dispose(); S.fx = null;
   const [path, query] = location.hash.slice(1).split("?");
   const parts = path.split("/").filter(Boolean);
   if (!S.config) { S.config = await api("api/config").catch(() => ({ demo: false, plans: {}, private_mode: true })); APP = S.config.app_name || APP; }
@@ -139,9 +140,11 @@ async function route() {
   const key = parts[0] || "";
   if (!S.me || (key in pub && key !== "")) {
     if (!S.me && key in PAGES) return go("#/signin");
-    return (pub[key] || pub[""])(parts, new URLSearchParams(query || ""));
+    const page = (pub[key] || pub[""])(parts, new URLSearchParams(query || ""));
+    authBackdrop();
+    return page;
   }
-  if (S.me.passkeys?.required && S.me.user.id && !S.me.passkeys.count) return passkeySetup();
+  if (S.me.passkeys?.required && S.me.user.id && !S.me.passkeys.count) { passkeySetup(); return authBackdrop(); }
   const name = key in PAGES ? key : "overview";
   renderShell(name);
   try { await PAGES[name].render($("#content"), new URLSearchParams(query || "")); }
@@ -463,6 +466,7 @@ async function pageOverview(el) {
       <div class="card kpi"><div class="label">Left over</div><div class="value ${left < 0 ? "warn" : ""}">${zar(left)}</div>
         <div class="sub">Next month: ${zar(f.next.household.surplus_cents)}</div></div>
     </div>
+    ${jarsCard(v)}
     ${!single && v.people.length > 1 ? `<div class="people" style="margin-bottom:18px">${v.people.map((p) => `
       <div class="card person ${pclass(p.id)}"><div class="card-head"><h3><span class="dot ${pclass(p.id)}"></span> ${esc(p.name)}</h3>
         <span class="chip ${p.surplus_cents < 0 ? "warn" : "good"}">${p.surplus_cents < 0 ? "Short" : "Left"} ${zar(Math.abs(p.surplus_cents))}</span></div>
@@ -485,12 +489,84 @@ async function pageOverview(el) {
           <td class="num">${zar(l.amount_cents)}</td></tr>`).join("")}</tbody></table>` : `<p class="muted">Nothing changed from last month.</p>`}</div>
     </div>`;
   bindBarTips(el);
+  mountJars(v);
 }
 
 function emptyBudget(el) {
   el.innerHTML = `${billingBanner()}<div class="card empty"><h3>Let's build your first month</h3>
     <p>Add each person's salary and what goes out, or bring in the Excel budget you already keep.</p>
     <div class="row" style="justify-content:center;margin-top:16px"><a class="btn primary" href="#/budget">Add items</a><a class="btn" href="#/settings?tab=import">Import from Excel</a></div></div>`;
+}
+
+// ---------------------------------------------------------------- 3D (scene3d.js, loaded on demand)
+let fxModule = null;
+const loadFx = () => (fxModule ||= import("./scene3d.js"));
+const JAR_KEYS = ["Essentials", "Lifestyle", "Savings", "Transfers"];
+
+// Each person's money out, split into the jar layers. Transfers to a partner come from the totals so
+// they aren't counted twice.
+function jarPeople(v) {
+  return v.people.map((p) => {
+    const groups = { Essentials: 0, Lifestyle: 0, Savings: 0, Transfers: p.transfer_out_cents || 0 };
+    for (const sec of p.sections) for (const l of sec.lines) {
+      if (l.kind !== "expense" && l.kind !== "saving") continue;
+      const g = l.group in groups && l.group !== "Transfers" ? l.group : l.kind === "saving" ? "Savings" : "Lifestyle";
+      groups[g] += l.amount_cents;
+    }
+    return { id: p.id, name: p.name, cls: pclass(p.id), money_in_cents: p.money_in_cents, surplus_cents: p.surplus_cents, groups };
+  });
+}
+
+function jarsCard(v) {
+  const people = jarPeople(v);
+  const totals = Object.fromEntries(JAR_KEYS.map((k) => [k, people.reduce((a, p) => a + p.groups[k], 0)]));
+  const summary = people.map((p) => `${p.name}: ${zar(p.money_in_cents)} in; ` + JAR_KEYS.filter((k) => p.groups[k]).map((k) => `${k.toLowerCase()} ${zar(p.groups[k])}`).join(", ")
+    + `; ${p.surplus_cents < 0 ? "short" : "left over"} ${zar(Math.abs(p.surplus_cents))}.`).join(" ");
+  return `<div class="card jars-card" id="jars-card">
+    <div class="card-head"><h3>${people.length > 1 ? "Your jars" : "Your jar"}</h3><span class="small muted">Jar height is money in · drag to turn</span></div>
+    <div class="jars3d" id="jars3d" role="img" aria-label="${esc(summary)}"><div class="fx-tip hidden" id="jars-tip"></div></div>
+    <div class="legend jars-legend">${JAR_KEYS.filter((k) => totals[k]).map((k) => `<span><span class="sw jar-${k.toLowerCase()}"></span>${k} <b>${zar(totals[k])}</b></span>`).join("")}
+      <span><span class="sw jar-left"></span>Clear glass: left over</span></div>
+  </div>`;
+}
+
+async function mountJars(v) {
+  const host = $("#jars3d");
+  if (!host) return;
+  try {
+    const fx = await loadFx();
+    if (!host.isConnected) return;
+    if (!fx.webglAvailable()) return $("#jars-card")?.remove();
+    const tip = $("#jars-tip");
+    S.fx?.dispose();
+    S.fx = fx.mountJars(host, jarPeople(v), {
+      format: (c) => zar(c),
+      onTip: (d, x, y) => {
+        if (!d) return tip.classList.add("hidden");
+        tip.innerHTML = `<b>${esc(d.layer)}</b> · ${esc(d.person)}<br>${zar(d.cents)} <span class="muted">(${d.share}% of money in)</span>`;
+        tip.style.transform = `translate(${Math.min(x + 14, host.clientWidth - 200)}px, ${Math.max(0, y - 54)}px)`;
+        tip.classList.remove("hidden");
+      },
+    });
+  } catch {
+    $("#jars-card")?.remove();   // no 3D (old browser, blocked WebGL): the cards below still show everything
+  }
+}
+
+async function authBackdrop() {
+  const wrap = $(".public");
+  if (!wrap || !$(".auth-wrap") || wrap.querySelector(".fx-backdrop")) return;
+  const host = document.createElement("div");
+  host.className = "fx-backdrop";
+  wrap.prepend(host);
+  try {
+    const fx = await loadFx();
+    if (!host.isConnected || !fx.webglAvailable()) return host.remove();
+    S.fx?.dispose();
+    S.fx = fx.mountBackdrop(host);
+  } catch {
+    host.remove();
+  }
 }
 
 function insightList(items) {
