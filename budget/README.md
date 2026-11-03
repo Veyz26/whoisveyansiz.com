@@ -1,6 +1,6 @@
 # Private budget app (`/private/`)
 
-The household budget app (working name **Linen**), served at **whoisveyansiz.com/private/**. You sign
+The household budget app (**KAVE Budget**), served at **whoisveyansiz.com/private/**. You sign
 in with **Face ID or Touch ID** (passkeys). Only email addresses on an allowlist can get in. It's a PHP port of the current
 Python version, so it runs on the existing Hostinger shared plan with no extra hosting.
 

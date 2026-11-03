@@ -2,7 +2,7 @@
 // Copy to dev/config.php for local development (gitignored). Production config lives OUTSIDE public_html:
 // /home/<user>/domains/whoisveyansiz.com/budget-private/config.php  (see README → Deploy).
 return [
-    'app_name' => 'Linen',
+    'app_name' => 'KAVE Budget',
     'db_path' => __DIR__ . '/data/dev.db',
     'private_mode' => true,                       // only the emails below can sign in; no billing
     'allowed_emails' => ['you@example.com', 'partner@example.com'],

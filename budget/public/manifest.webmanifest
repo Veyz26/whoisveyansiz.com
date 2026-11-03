@@ -1,7 +1,7 @@
 {
   "id": "/private/",
-  "name": "Our budget",
-  "short_name": "Budget",
+  "name": "KAVE Budget",
+  "short_name": "KAVE Budget",
   "description": "Our household budget",
   "start_url": "/private/#/overview",
   "scope": "/private/",
