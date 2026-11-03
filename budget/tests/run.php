@@ -139,6 +139,11 @@ foreach (['transactions', 'budget_lines', 'accounts', 'api_tokens'] as $tbl) {
 check(!$db->val('SELECT 1 FROM users WHERE id = ?', [$a]), 'delete removes the login');
 check((bool)$db->val('SELECT 1 FROM users WHERE id = ?', [$b]), "other households are untouched");
 
+// --- setup phrases ------------------------------------------------------------------------------
+Config::set(['private_mode' => true, 'setup_codes' => ['A@B.test' => 'OurKAVE', 'c@d.test' => 'Kave1']]);
+check(Auth::setup_code_ok('a@b.test', 'our kave') && !Auth::setup_code_ok('a@b.test', 'OurKAVE!x'), 'a short passphrase like OurKAVE works, and only exactly');
+check(!Auth::setup_code_ok('c@d.test', 'Kave1') && !Auth::setup_code_ok('c@d.test', ''), 'a phrase under 6 letters or numbers never matches');
+
 // --- passkeys (Face ID / Touch ID) -------------------------------------------------------------
 $db = fresh();
 $base = 'https://whoisveyansiz.com/private';
