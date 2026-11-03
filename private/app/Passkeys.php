@@ -244,7 +244,11 @@ final class Passkeys
             'pubKeyCredParams' => [['type' => 'public-key', 'alg' => -7], ['type' => 'public-key', 'alg' => -257]],
             'timeout' => 120000,
             'attestation' => 'none',
-            'authenticatorSelection' => ['residentKey' => 'required', 'requireResidentKey' => true, 'userVerification' => 'required'],
+            // Save it on this device (iCloud Keychain, Google Password Manager, Windows Hello), not on a phone
+            // reached through a QR code or a security key: each device gets its own passkey.
+            'authenticatorSelection' => ['authenticatorAttachment' => 'platform', 'residentKey' => 'required',
+                'requireResidentKey' => true, 'userVerification' => 'required'],
+            'hints' => ['client-device'],
             'excludeCredentials' => array_map(fn($c) => ['type' => 'public-key', 'id' => $c],
                 array_column($db->all('SELECT credential_id FROM passkeys WHERE user_id = ?', [$uid]), 'credential_id')),
         ];
@@ -281,8 +285,9 @@ final class Passkeys
     public static function login_options(Conn $db, string $baseUrl): array
     {
         // No allowCredentials: the device offers its passkeys for this site (usernameless sign-in).
+        // The hint asks browsers to offer this device's passkeys before a phone's QR code.
         return ['challenge' => self::new_challenge($db, 'login', null), 'rpId' => self::rp($baseUrl)['id'],
-            'timeout' => 120000, 'userVerification' => 'required'];
+            'timeout' => 120000, 'userVerification' => 'required', 'hints' => ['client-device']];
     }
 
     /** Verifies a navigator.credentials.get() result. Returns the user id. */
