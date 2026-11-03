@@ -146,6 +146,8 @@ $u = Auth::signup($db, ['email' => 'veyz@example.test', 'name' => 'Veyz', 'passw
 $phone = new FakeAuthenticator('whoisveyansiz.com', 'https://whoisveyansiz.com');
 $opts = Passkeys::register_options($db, $u, $base);
 check($opts['rp']['id'] === 'whoisveyansiz.com' && $opts['authenticatorSelection']['userVerification'] === 'required', 'registration asks for Face ID on this domain');
+check($opts['authenticatorSelection']['authenticatorAttachment'] === 'platform' && $opts['hints'] === ['client-device'], 'registration saves the passkey on this device, not a phone via QR code');
+check(Passkeys::login_options($db, $base)['hints'] === ['client-device'], 'sign-in prefers this device over a QR code');
 check(strlen(Passkeys::unb64u($opts['user']['id'])) === 16 && $opts['user']['id'] === Passkeys::register_options($db, $u, $base)['user']['id'], 'user handle is a stable random 16-byte value, not the database id');
 $pkId = Passkeys::register_verify($db, $u, $phone->create($opts), $base, 'iPhone');
 check(Passkeys::count($db, $u) === 1 && $pkId > 0, 'passkey registered');

@@ -129,6 +129,7 @@ addEventListener("hashchange", route);
 async function route() {
   closeOverlays(); hideTip();
   S.fx?.dispose(); S.fx = null;
+  S.pkWait?.abort(); S.pkWait = null;
   const [path, query] = location.hash.slice(1).split("?");
   const parts = path.split("/").filter(Boolean);
   if (!S.config) { S.config = await api("api/config").catch(() => ({ demo: false, plans: {}, private_mode: true })); APP = S.config.app_name || APP; }
@@ -145,6 +146,7 @@ async function route() {
     return page;
   }
   if (S.me.passkeys?.required && S.me.user.id && !S.me.passkeys.count) { passkeySetup(); return authBackdrop(); }
+  if (S.addDevice) { S.addDevice = false; passkeySetup(true); return authBackdrop(); }
   const name = key in PAGES ? key : "overview";
   renderShell(name);
   try { await PAGES[name].render($("#content"), new URLSearchParams(query || "")); }
@@ -223,14 +225,15 @@ function signin(parts, q) {
     <p class="muted">${priv ? "Only invited people can sign in." : "Sign in to your household budget."}</p>
     ${err ? `<div class="banner warn" style="margin:16px 0 0">${esc(err)}</div>` : ""}
     ${hasPasskeys() ? `<button class="btn primary" id="pk-login" style="justify-content:center;width:100%;margin-top:22px">${icon("face")} Sign in with Face ID</button>
-      <div class="error" id="pk-err" style="margin-top:8px;text-align:center"></div>` : ""}
+      <div class="error" id="pk-err" style="margin-top:8px;text-align:center"></div>
+      ${S.config.password_login ? `<p class="small muted" style="text-align:center;margin:4px 0 0">New phone or computer? Sign in below with your password and a recovery code, then add Face ID on it.</p>` : ""}` : ""}
     ${S.config.microsoft ? `<a class="btn ${hasPasskeys() ? "" : "primary"} ms" href="api/auth/microsoft/start" style="justify-content:center;width:100%;margin-top:22px">
       <svg viewBox="0 0 21 21" width="16" height="16" aria-hidden="true"><path fill="#f25022" d="M1 1h9v9H1z"/><path fill="#7fba00" d="M11 1h9v9h-9z"/><path fill="#00a4ef" d="M1 11h9v9H1z"/><path fill="#ffb900" d="M11 11h9v9h-9z"/></svg>
       Sign in with Microsoft</a>
       <p class="small muted" style="margin-top:10px;text-align:center">By signing in you agree to the <a href="#/privacy">privacy notice</a>.</p>` : ""}
     ${S.config.password_login ? `${S.config.microsoft || hasPasskeys() ? `<div class="or"><span>or use a password</span></div>` : ""}
     <form id="f">
-      <label class="field">Email <input type="email" name="email" autocomplete="email" required></label>
+      <label class="field">Email <input type="email" name="email" autocomplete="username webauthn" required></label>
       <label class="field">Password <input type="password" name="password" autocomplete="current-password" required></label>
       <label class="field hidden" id="rc-row">Recovery code <input type="text" name="recovery" autocomplete="one-time-code" placeholder="XXXXX-XXXXX" spellcheck="false"></label>
       <div class="error" id="err"></div>
@@ -243,17 +246,34 @@ function signin(parts, q) {
   $("#f")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
-    try { await api("api/auth/login", { method: "POST", body: { email: f.get("email"), password: f.get("password"), recovery_code: f.get("recovery") || null } }); S.me = null; go("#/overview"); }
+    try {
+      await api("api/auth/login", { method: "POST", body: { email: f.get("email"), password: f.get("password"), recovery_code: f.get("recovery") || null } });
+      // A recovery code means this device has no passkey yet: offer to add one.
+      S.me = null; S.addDevice = !!f.get("recovery") && hasPasskeys(); go("#/overview");
+    }
     catch (err) {
       $("#err").textContent = err.message;
       if (err.data?.need_recovery_code) { $("#rc-row").classList.remove("hidden"); $("[name=recovery]").focus(); }
     }
   });
   $("#pk-login")?.addEventListener("click", async (e) => {
+    S.pkWait?.abort(); S.pkWait = null;  // only one passkey request at a time
     e.target.disabled = true; $("#pk-err").textContent = "";
     try { await passkeySignIn(); S.me = null; go("#/overview"); }
-    catch (err) { $("#pk-err").textContent = passkeyError(err); e.target.disabled = false; }
+    catch (err) { $("#pk-err").textContent = passkeyError(err, true); e.target.disabled = false; }
   });
+  passkeyAutofill();
+}
+
+// Offers this device's passkeys in the email field's suggestions (Safari's QuickType bar, Chrome's
+// autofill). A device without one shows nothing, so this never leads to a QR code.
+async function passkeyAutofill() {
+  if (!hasPasskeys() || !(await PublicKeyCredential.isConditionalMediationAvailable?.().catch(() => false))) return;
+  if (!$("#pk-login")) return;  // left the page while checking
+  const wait = (S.pkWait = new AbortController());
+  try { await passkeySignIn({ mediation: "conditional", signal: wait.signal }); S.me = null; go("#/overview"); }
+  // The browser's own refusals (no passkey picked, request replaced) stay silent; only our server's answer is shown.
+  catch (err) { if (!wait.signal.aborted && !(err instanceof DOMException) && $("#pk-err")) $("#pk-err").textContent = passkeyError(err, true); }
 }
 
 function signup(parts) {
@@ -322,16 +342,18 @@ function deviceName() {
   if (/Windows/.test(ua)) return "Windows PC";
   return "This device";
 }
-function passkeyError(e) {
-  if (e?.name === "NotAllowedError") return "Face ID was cancelled or timed out.";
+function passkeyError(e, signingIn) {
+  if (e?.name === "NotAllowedError") return signingIn
+    ? "Face ID was cancelled, or this device has no passkey for this site yet. On a new device, use your password and a recovery code."
+    : "Face ID was cancelled or timed out.";
   if (e?.name === "InvalidStateError") return "This device already has a passkey for this account.";
   if (e?.name === "SecurityError") return "Passkeys only work on the real website address (https).";
   return e?.message || "Something went wrong with Face ID.";
 }
 
-async function passkeySignIn() {
+async function passkeySignIn({ mediation, signal } = {}) {
   const o = await api("api/auth/passkey/options", { method: "POST", body: {} });
-  const a = await navigator.credentials.get({ publicKey: { ...o, challenge: fromB64u(o.challenge) } });
+  const a = await navigator.credentials.get({ publicKey: { ...o, challenge: fromB64u(o.challenge) }, mediation, signal });
   await api("api/auth/passkey/verify", { method: "POST", body: {
     id: a.id, rawId: toB64u(a.rawId), type: a.type,
     response: { clientDataJSON: toB64u(a.response.clientDataJSON), authenticatorData: toB64u(a.response.authenticatorData),
@@ -364,24 +386,29 @@ function bindRecoveryCodes(box, codes) {
   };
 }
 
-function passkeySetup() {
+// again: the account already has Face ID elsewhere and this device signed in with a recovery code.
+function passkeySetup(again) {
   const ok = hasPasskeys();
   $("#root").innerHTML = `<div class="public">${pubNav()}<div class="auth-wrap"><div class="card auth" id="setup">
-    <span class="chip">One-time setup</span>
-    <h1 style="margin-top:14px">Add Face ID</h1>
-    <p class="muted">From now on you'll sign in with Face ID or Touch ID: your phone plus your face, so a stolen password isn't enough. It syncs to your other Apple devices through iCloud Keychain.</p>
+    <span class="chip">${again ? "New device" : "One-time setup"}</span>
+    <h1 style="margin-top:14px">${again ? "Add Face ID on this device" : "Add Face ID"}</h1>
+    <p class="muted">${again
+      ? "You used a recovery code to get in. Add Face ID or Touch ID here and this device signs in with your face from now on, with no code or QR code."
+      : "From now on you'll sign in with Face ID or Touch ID: your phone plus your face, so a stolen password isn't enough. It's saved on this device, and syncs to your other Apple devices through iCloud Keychain."}</p>
     ${ok ? `<label class="field" style="margin-top:18px">Name this device <input type="text" id="pk-name" value="${esc(deviceName())}" maxlength="40"></label>
       <div class="error" id="err" style="margin-top:10px"></div>
       <button class="btn primary" id="add-pk" style="justify-content:center;width:100%;margin-top:14px">${icon("face")} Add Face ID</button>`
       : `<div class="banner warn" style="margin-top:18px">This browser doesn't support passkeys. Open this page in Safari on your iPhone or Mac, or a recent Chrome or Edge.</div>`}
-    <p class="small muted" style="text-align:center;margin-top:16px"><button class="link" id="out">Sign out</button></p>
+    <p class="small muted" style="text-align:center;margin-top:16px">${again ? `<button class="link" id="skip">Not now</button>` : `<button class="link" id="out">Sign out</button>`}</p>
   </div></div></div>`;
-  $("#out").onclick = async () => { await api("api/auth/logout", { method: "POST", body: {} }).catch(() => {}); S.me = false; go("#/"); };
+  $("#skip")?.addEventListener("click", () => go("#/overview"));
+  $("#out")?.addEventListener("click", async () => { await api("api/auth/logout", { method: "POST", body: {} }).catch(() => {}); S.me = false; go("#/"); });
   $("#add-pk")?.addEventListener("click", async (e) => {
     e.target.disabled = true;
     try {
       const r = await passkeyRegister($("#pk-name").value);
       await refreshMe();
+      if (!r.recovery_codes) { toast("Face ID added on this device"); return go("#/overview"); }
       $("#setup").innerHTML = `<span class="chip good">Face ID added</span>
         <h1 style="margin-top:14px">Save your recovery codes</h1>
         <p class="muted">If you ever lose access to your devices, sign in with your password plus one of these codes. Each works once. Keep them somewhere safe, like your password manager.</p>
@@ -1245,7 +1272,7 @@ route().then(() => setTimeout(installHint, 1500));
 async function renderPasskeyCard(card) {
   const r = await api("api/passkeys");
   card.innerHTML = `<div class="card-head"><h3>Face ID &amp; passkeys</h3>${hasPasskeys() ? `<button class="btn sm primary" id="pk-add">${icon("face")} Add this device</button>` : ""}</div>
-    <p class="muted small">Sign in with Face ID, Touch ID or your device PIN. Passkeys on Apple devices sync through iCloud Keychain.</p>
+    <p class="muted small">Sign in with Face ID, Touch ID or your device PIN. Each device keeps its own passkey (Apple devices share theirs through iCloud Keychain). To add a new phone, sign in on it with your password and a recovery code, and it offers Face ID there.</p>
     ${r.passkeys.length ? `<table class="t"><tbody>${r.passkeys.map((k) => `<tr><td>${esc(k.name)}<div class="small muted">Added ${esc(k.created_at.slice(0, 10))}${k.last_used_at ? ` · last used ${esc(k.last_used_at.slice(0, 10))}` : ""}</div></td>
       <td class="num"><button class="link small" data-pk-del="${k.id}">Remove</button></td></tr>`).join("")}</tbody></table>` : `<p class="small warn">No passkeys yet.</p>`}
     <div class="row" style="justify-content:space-between;margin-top:16px"><span class="small muted">${r.recovery_left} of 10 recovery codes left</span>
