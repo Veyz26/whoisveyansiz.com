@@ -298,6 +298,18 @@ final class Api
             return ['ok' => true];
         }, public: true);
 
+        $R('POST', '/api/auth/lookup', function (Ctx $c) {
+            if (!Config::get('private_mode')) {
+                throw new ApiError(404, 'Not found');
+            }
+            Auth::throttle($c->db, 'lookup:' . self::ip(), 20, 600);
+            try {
+                return Auth::lookup($c->db, (string)($c->body['email'] ?? ''));
+            } catch (AuthError $e) {
+                throw new ApiError(400, $e->getMessage());
+            }
+        }, public: true);
+
         $R('POST', '/api/auth/login', function (Ctx $c) {
             Auth::throttle($c->db, 'login:' . self::ip(), 10, 60);
             try {

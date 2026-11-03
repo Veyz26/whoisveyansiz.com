@@ -106,6 +106,7 @@ const I = {
   house: '<path d="M4 11 12 4l8 7"/><path d="M6 10v10h12V10"/>',
   more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   share: '<path d="M12 3v12M8 7l4-4 4 4"/><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/>',
+  arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   face: '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M9 9v1.5M15 9v1.5M12 9v4h-1M9.5 15.5a3.5 3.5 0 0 0 5 0"/>',
 };
 const icon = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n]}</svg>`;
@@ -137,7 +138,8 @@ async function route() {
     try { S.me = await api("api/me"); S.month = S.month || S.me.this_month; }
     catch (e) { if (e.offline) return offlineScreen(); S.me = false; }
   }
-  const pub = { "": S.config.private_mode ? signin : landing, signin: signin, signup: signup, privacy: privacyPage, join: signup };
+  const priv = S.config.private_mode;
+  const pub = { "": priv ? privateSignin : landing, signin: priv ? privateSignin : signin, signup: priv ? privateSignin : signup, privacy: privacyPage, join: signup };
   const key = parts[0] || "";
   if (!S.me || (key in pub && key !== "")) {
     if (!S.me && key in PAGES) return go("#/signin");
@@ -256,24 +258,164 @@ function signin(parts, q) {
       if (err.data?.need_recovery_code) { $("#rc-row").classList.remove("hidden"); $("[name=recovery]").focus(); }
     }
   });
-  $("#pk-login")?.addEventListener("click", async (e) => {
-    S.pkWait?.abort(); S.pkWait = null;  // only one passkey request at a time
-    e.target.disabled = true; $("#pk-err").textContent = "";
-    try { await passkeySignIn(); S.me = null; go("#/overview"); }
-    catch (err) { $("#pk-err").textContent = passkeyError(err, true); e.target.disabled = false; }
+  $("#pk-login")?.addEventListener("click", (e) => faceIdSignIn(e.currentTarget, $("#pk-err"),
+    "Face ID was cancelled, or this device has no passkey for this site yet. On a new device, use your password and a recovery code."));
+  prefetchPasskey();
+  passkeyAutofill($("#pk-err"));
+}
+
+// ---------------------------------------------------------------- private sign-in
+// One card, email first: the server says what this person needs next (Face ID, their password, or
+// setting up the account), so the card only ever shows that one step.
+function privateSignin(parts, q) {
+  $("#root").innerHTML = `<div class="public">${pubNav()}<div class="auth-wrap"><div class="card auth" id="auth"></div></div></div>`;
+  authStep("start", { error: q?.get("error") || "" });
+}
+
+const pwField = (ac) => `<label class="field">Password<span class="pw">
+  <input type="password" name="password" autocomplete="${ac}" required${ac === "new-password" ? ` minlength="10" placeholder="At least 10 characters"` : ""}>
+  <button type="button" class="pw-toggle" aria-label="Show password">Show</button></span></label>`;
+
+function authStep(step, ctx = {}) {
+  const box = $("#auth");
+  if (!box) return;
+  S.pkWait?.abort(); S.pkWait = null;
+  const { email = "", name = "" } = ctx;
+  const hi = `<h1>Hi ${esc(name || "there")}</h1>`;
+  const who = `<button type="button" class="who" id="who" aria-label="Use a different email">
+    <span class="avatar" aria-hidden="true">${esc((name || email || "?")[0].toUpperCase())}</span><span class="who-email">${esc(email)}</span><span class="who-change">Change</span></button>`;
+  // Lets password managers file the password under the right email.
+  const user = `<input class="sr" type="email" name="username" autocomplete="username" value="${esc(email)}" tabindex="-1" aria-hidden="true" readonly>`;
+  const face = (label) => hasPasskeys() ? `<button type="button" class="btn primary xl" id="pk">${icon("face")} ${label}</button>` : "";
+  const views = {
+    start: () => `
+      <span class="chip">Private</span>
+      <h1>Sign in</h1>
+      <p class="muted lead">Your household budget, for invited people only.</p>
+      ${face("Sign in with Face ID")}
+      ${hasPasskeys() ? `<div class="or"><span>or continue with email</span></div>` : ""}
+      <form id="f" class="inline-form" novalidate>
+        <label class="sr" for="email">Email</label>
+        <input id="email" type="email" name="email" value="${esc(email)}" placeholder="Email address" autocomplete="username webauthn"
+          inputmode="email" autocapitalize="off" spellcheck="false" required>
+        <button class="btn icon-btn" aria-label="Continue">${icon("arrow")}</button>
+      </form>
+      ${S.config.microsoft ? `<a class="btn xl ms" href="api/auth/microsoft/start">Continue with Microsoft</a>` : ""}`,
+    passkey: () => `${who}${hi}
+      <p class="muted lead">${hasPasskeys() ? "Sign in with Face ID." : "This browser can't use Face ID. Use your password and a recovery code."}</p>
+      ${face("Use Face ID")}
+      <div class="error" id="err" role="alert">${esc(ctx.error || "")}</div>
+      <details class="alt"${hasPasskeys() ? "" : " open"}><summary>New phone or computer?</summary>
+        <p class="small muted">Use your password and one recovery code, once. Then add Face ID on this device.</p>
+        <form id="f">${user}${pwField("current-password")}
+          <label class="field">Recovery code<input type="text" name="recovery" autocomplete="one-time-code" placeholder="XXXXX-XXXXX" spellcheck="false" autocapitalize="characters" required></label>
+          <button class="btn xl">Sign in</button><div class="error" role="alert"></div></form>
+      </details>`,
+    password: () => `${who}${hi}
+      <p class="muted lead">Enter your password${S.config.require_passkey ? ", then add Face ID" : ""}.</p>
+      <form id="f">${user}${pwField("current-password")}<button class="btn primary xl">Sign in</button></form>`,
+    new: () => `${who}
+      <h1>Create your account</h1>
+      <p class="muted lead">You're on the invite list. Next you'll add Face ID.</p>
+      <form id="f">${user}
+        <label class="field">Your name<input type="text" name="name" autocomplete="given-name" maxlength="60" required></label>
+        <label class="field">Setup code<input type="text" name="setup_code" autocomplete="one-time-code" placeholder="XXXX-XXXX-XXXX" spellcheck="false" autocapitalize="characters" required>
+          <span class="hint">From the owner. Each email has its own.</span></label>
+        ${pwField("new-password")}
+        <label class="check"><input type="checkbox" name="service" required> <span>I agree to the <a href="#/privacy" target="_blank">privacy notice</a>.</span></label>
+        <button class="btn primary xl">Create account</button></form>`,
+    microsoft: () => `${who}${hi}
+      <p class="muted lead">This account signs in with Microsoft.</p>
+      <a class="btn primary xl" href="api/auth/microsoft/start">Continue with Microsoft</a>`,
+  };
+  const body = views[step]();
+  box.innerHTML = `<div class="step">${body}
+    ${body.includes('id="err"') ? "" : `<div class="error" id="err" role="alert">${esc(ctx.error || "")}</div>`}
+    ${step === "start" && S.config.demo ? `<p class="foot"><button class="link" id="try-demo">Explore the demo</button></p>` : ""}</div>`;
+
+  const err = $("#err", box), form = $("#f", box);
+  const say = (m) => { ($(".error", form) || err).textContent = m; };
+  $("#who", box)?.addEventListener("click", () => authStep("start", { email }));
+  $("#try-demo", box)?.addEventListener("click", startDemo);
+  box.querySelectorAll(".pw-toggle").forEach((b) => b.addEventListener("click", () => {
+    const i = b.previousElementSibling, show = i.type === "password";
+    i.type = show ? "text" : "password"; b.textContent = show ? "Hide" : "Show"; b.setAttribute("aria-label", show ? "Hide password" : "Show password");
+  }));
+  $("#pk", box)?.addEventListener("click", (e) => faceIdSignIn(e.currentTarget, err, step === "start"
+    ? "No Face ID for KAVE on this device yet? Continue with your email."
+    : "Face ID didn't go through. Try again, or use \u201cNew phone or computer?\u201d"));
+  if (hasPasskeys() && (step === "start" || step === "passkey")) prefetchPasskey();
+  if (step === "start") passkeyAutofill(err);
+  // Phones: open the keyboard only where typing is the next thing to do.
+  if (step === "password" || step === "new") $("input:not(.sr)", form)?.focus();
+
+  form?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!form.checkValidity()) return form.reportValidity();
+    const f = new FormData(form), btn = $("button:not([type=button])", form);
+    btn.disabled = true; say("");
+    try {
+      if (step === "start") {
+        const to = String(f.get("email")).trim();
+        const r = await api("api/auth/lookup", { method: "POST", body: { email: to } });
+        if (r.next === "not_invited") throw new Error("That email isn't on the invite list. Check for a typo, or ask the owner to add it.");
+        return authStep(r.next, { email: to, name: r.name });
+      }
+      if (step === "new") {
+        await api("api/auth/signup", { method: "POST", body: { name: f.get("name"), email, password: f.get("password"), setup_code: f.get("setup_code"),
+          consents: { service: !!f.get("service"), product_updates: false } } });
+      } else {
+        await api("api/auth/login", { method: "POST", body: { email, password: f.get("password"), recovery_code: f.get("recovery") || null } });
+        S.addDevice = step === "passkey" && hasPasskeys();  // signed in without Face ID: offer it on this device
+      }
+      S.me = null; go("#/overview");
+    } catch (x) {
+      // The account got Face ID since the email check: switch to that step.
+      if (x.data?.need_recovery_code && step === "password") return authStep("passkey", { email, name, error: x.message });
+      say(x.message); btn.disabled = false;
+    }
   });
-  passkeyAutofill();
+}
+
+// Login options are fetched before the tap, so the Face ID prompt opens straight from it: Safari can
+// refuse a prompt that starts too long after the tap, and it saves a round trip.
+let pkNext = null;
+function prefetchPasskey() {
+  const p = api("api/auth/passkey/options", { method: "POST", body: {} }).then((o) => ({ o, at: Date.now() }));
+  p.catch(() => {});
+  pkNext = p;
+}
+async function loginOptions() {
+  const p = pkNext; pkNext = null;
+  const got = p && (await p.catch(() => null));
+  if (got && Date.now() - got.at < 4 * 60_000) return got.o;  // the server keeps challenges for 5 minutes
+  return api("api/auth/passkey/options", { method: "POST", body: {} });
+}
+
+async function faceIdSignIn(btn, err, notAllowed) {
+  btn.disabled = true; err.textContent = "";
+  // One passkey request at a time: stop the email field's autofill request and let it finish first.
+  S.pkWait?.abort(); S.pkWait = null;
+  await pkSettled;
+  try { await passkeySignIn(); S.me = null; go("#/overview"); }
+  catch (e) { err.textContent = passkeyError(e, notAllowed); btn.disabled = false; prefetchPasskey(); }
 }
 
 // Offers this device's passkeys in the email field's suggestions (Safari's QuickType bar, Chrome's
 // autofill). A device without one shows nothing, so this never leads to a QR code.
-async function passkeyAutofill() {
+let pkSettled = Promise.resolve();  // the last autofill request, settled (it never rejects)
+async function passkeyAutofill(err) {
   if (!hasPasskeys() || !(await PublicKeyCredential.isConditionalMediationAvailable?.().catch(() => false))) return;
-  if (!$("#pk-login")) return;  // left the page while checking
-  const wait = (S.pkWait = new AbortController());
-  try { await passkeySignIn({ mediation: "conditional", signal: wait.signal }); S.me = null; go("#/overview"); }
-  // The browser's own refusals (no passkey picked, request replaced) stay silent; only our server's answer is shown.
-  catch (err) { if (!wait.signal.aborted && !(err instanceof DOMException) && $("#pk-err")) $("#pk-err").textContent = passkeyError(err, true); }
+  await pkSettled;  // a request that was just stopped has to finish before the next one starts
+  if (!err.isConnected || S.pkWait) return;  // left the page, or already waiting
+  const ctrl = new AbortController();
+  const done = passkeySignIn({ mediation: "conditional", signal: ctrl.signal })
+    .then(() => { S.me = null; go("#/overview"); })
+    // The browser's own refusals (no passkey picked, request replaced) stay silent; only our server's answer is shown.
+    .catch((e) => { if (!ctrl.signal.aborted && !(e instanceof DOMException) && err.isConnected) err.textContent = passkeyError(e); })
+    .finally(() => { if (S.pkWait?.done === done) S.pkWait = null; });
+  S.pkWait = { abort: () => ctrl.abort(), done };
+  pkSettled = done;
 }
 
 function signup(parts) {
@@ -342,17 +484,15 @@ function deviceName() {
   if (/Windows/.test(ua)) return "Windows PC";
   return "This device";
 }
-function passkeyError(e, signingIn) {
-  if (e?.name === "NotAllowedError") return signingIn
-    ? "Face ID was cancelled, or this device has no passkey for this site yet. On a new device, use your password and a recovery code."
-    : "Face ID was cancelled or timed out.";
+function passkeyError(e, notAllowed = "Face ID was cancelled or timed out.") {
+  if (e?.name === "NotAllowedError") return notAllowed;
   if (e?.name === "InvalidStateError") return "This device already has a passkey for this account.";
   if (e?.name === "SecurityError") return "Passkeys only work on the real website address (https).";
   return e?.message || "Something went wrong with Face ID.";
 }
 
 async function passkeySignIn({ mediation, signal } = {}) {
-  const o = await api("api/auth/passkey/options", { method: "POST", body: {} });
+  const o = mediation ? await api("api/auth/passkey/options", { method: "POST", body: {} }) : await loginOptions();
   const a = await navigator.credentials.get({ publicKey: { ...o, challenge: fromB64u(o.challenge) }, mediation, signal });
   await api("api/auth/passkey/verify", { method: "POST", body: {
     id: a.id, rawId: toB64u(a.rawId), type: a.type,
@@ -390,16 +530,16 @@ function bindRecoveryCodes(box, codes) {
 function passkeySetup(again) {
   const ok = hasPasskeys();
   $("#root").innerHTML = `<div class="public">${pubNav()}<div class="auth-wrap"><div class="card auth" id="setup">
-    <span class="chip">${again ? "New device" : "One-time setup"}</span>
-    <h1 style="margin-top:14px">${again ? "Add Face ID on this device" : "Add Face ID"}</h1>
-    <p class="muted">${again
-      ? "You used a recovery code to get in. Add Face ID or Touch ID here and this device signs in with your face from now on, with no code or QR code."
-      : "From now on you'll sign in with Face ID or Touch ID: your phone plus your face, so a stolen password isn't enough. It's saved on this device, and syncs to your other Apple devices through iCloud Keychain."}</p>
-    ${ok ? `<label class="field" style="margin-top:18px">Name this device <input type="text" id="pk-name" value="${esc(deviceName())}" maxlength="40"></label>
-      <div class="error" id="err" style="margin-top:10px"></div>
-      <button class="btn primary" id="add-pk" style="justify-content:center;width:100%;margin-top:14px">${icon("face")} Add Face ID</button>`
+    <div class="step"><span class="chip">${again ? "New device" : "Last step"}</span>
+    <h1>${again ? "Add Face ID here" : "Add Face ID"}</h1>
+    <p class="muted lead">${again
+      ? "Next time, this device signs in with your face. No code needed."
+      : "Sign in with your face from now on, so a stolen password isn't enough. It's saved on this device (and your other Apple devices through iCloud Keychain)."}</p>
+    ${ok ? `<label class="field">Device name<input type="text" id="pk-name" value="${esc(deviceName())}" maxlength="40"></label>
+      <button class="btn primary xl" id="add-pk" style="margin-top:14px">${icon("face")} Add Face ID</button>
+      <div class="error" id="err" role="alert"></div>`
       : `<div class="banner warn" style="margin-top:18px">This browser doesn't support passkeys. Open this page in Safari on your iPhone or Mac, or a recent Chrome or Edge.</div>`}
-    <p class="small muted" style="text-align:center;margin-top:16px">${again ? `<button class="link" id="skip">Not now</button>` : `<button class="link" id="out">Sign out</button>`}</p>
+    <p class="foot">${again ? `<button class="link" id="skip">Not now</button>` : `<button class="link" id="out">Sign out</button>`}</p></div>
   </div></div></div>`;
   $("#skip")?.addEventListener("click", () => go("#/overview"));
   $("#out")?.addEventListener("click", async () => { await api("api/auth/logout", { method: "POST", body: {} }).catch(() => {}); S.me = false; go("#/"); });
@@ -409,11 +549,11 @@ function passkeySetup(again) {
       const r = await passkeyRegister($("#pk-name").value);
       await refreshMe();
       if (!r.recovery_codes) { toast("Face ID added on this device"); return go("#/overview"); }
-      $("#setup").innerHTML = `<span class="chip good">Face ID added</span>
-        <h1 style="margin-top:14px">Save your recovery codes</h1>
-        <p class="muted">If you ever lose access to your devices, sign in with your password plus one of these codes. Each works once. Keep them somewhere safe, like your password manager.</p>
+      $("#setup").innerHTML = `<div class="step"><span class="chip good">Face ID added</span>
+        <h1>Save your recovery codes</h1>
+        <p class="muted lead">On a new phone or computer, you sign in once with your password and one of these. Each works once. Keep them in your password manager.</p>
         ${recoveryCodesHtml(r.recovery_codes || [])}
-        <button class="btn primary" id="done" style="justify-content:center;width:100%;margin-top:22px">I've saved them, continue</button>`;
+        <button class="btn primary xl" id="done" style="margin-top:22px">I've saved them</button></div>`;
       bindRecoveryCodes($("#setup"), r.recovery_codes || []);
       $("#done").onclick = () => go("#/overview");
     } catch (err) { $("#err").textContent = passkeyError(err); e.target.disabled = false; }
