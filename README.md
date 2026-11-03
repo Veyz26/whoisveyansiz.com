@@ -68,10 +68,37 @@ runtime needed at all.
 
 ### Option B — auto-deploy from GitHub
 
-Push to `main` and let a GitHub Action FTP the `out/` folder up. In hPanel go to
-**Files → FTP Accounts** and add `FTP_SERVER`, `FTP_USERNAME` and `FTP_PASSWORD`
-as repository secrets under **Settings → Secrets and variables → Actions**, then
-add `.github/workflows/deploy.yml`.
+Hostinger's Git deployment copies a branch into `public_html` but runs no build,
+so GitHub does the build: `.github/workflows/deploy.yml` runs `npm run build` on
+every push to `main` and commits `out/` to the **`deploy`** branch
+(`scripts/publish-deploy-branch.sh`). Hostinger pulls that branch.
+
+Use the website's own Git page, **not** "Add website → Node.js web app": a Node.js
+web app replaces `public_html/.htaccess` with its own and would break the
+security headers and the PHP budget app under `/private/`.
+
+1. Merge to `main` once and check **Actions** on GitHub shows a green run; a
+   `deploy` branch now exists.
+2. Back up the live site: File Manager → right-click `public_html` → **Compress**
+   → download.
+3. hPanel → **Websites → Manage** (whoisveyansiz.com) → **Advanced → Git**.
+4. Connect **GitHub**, pick `Veyz26/whoisveyansiz.com`, branch **`deploy`**,
+   directory `public_html` (the default). Deploy.
+5. Check the site, then delete any old files in `public_html` that aren't on the
+   `deploy` branch.
+
+From then on, merging into `main` goes live in a minute or two. To redeploy
+without a code change: **Actions → Build deploy branch → Run workflow**.
+
+## Private budget app (`/private/`)
+
+`budget/` holds a separate, self-contained PHP app served at `/private/` behind Face ID / Touch ID
+sign-in (passkeys; allowlisted emails only). The portfolio's top bar links to it with a lock icon. `npm run build` copies
+it into `out/private/`. Its config and database live outside `public_html`. See
+[budget/README.md](budget/README.md) for setup and tests.
+
+This is the one exception to "no server code": Hostinger runs the PHP under `/private/`, and the rest
+of the site stays static.
 
 ## What changed from the K8s version
 
