@@ -51,7 +51,7 @@ A, sa, jar = client()
 s, r = A("POST", "/api/auth/signup", {"email": "stranger@example.test", "name": "X", "password": pw, "consents": {"service": True}})
 expect(s == 400 and "private" in r["error"], "non-allowlisted signup refused")
 s, r = A("POST", "/api/auth/signup", {"email": "veyz@example.test", "name": "Veyz", "password": pw, "consents": {"service": True}})
-expect(s == 400 and "setup code" in r["error"], "allow-listed signup without setup code refused")
+expect(s == 400 and "setup phrase" in r["error"], "allow-listed signup without setup code refused")
 s, r = A("POST", "/api/auth/signup", {"email": "veyz@example.test", "name": "Veyz", "password": pw, "setup_code": SETUP["veyz@example.test"], "consents": {"service": True}})
 expect(s == 200, "allowlisted signup with setup code works")
 cookie = [c for c in jar if c.name == "linen_sid"][0]

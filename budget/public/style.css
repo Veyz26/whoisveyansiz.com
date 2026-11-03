@@ -203,8 +203,7 @@ label.field { display: grid; gap: 6px; font-size: 13px; color: var(--text-2); fo
 .pw input { padding-right: 66px; }
 .pw-toggle { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); border: 0; background: none; color: var(--accent); font: inherit; font-size: 13px; padding: 8px; cursor: pointer; }
 .auth .hint { font-weight: 400; color: var(--muted); font-size: 12.5px; }
-.auth input[name=setup_code], .auth input[name=recovery] { text-transform: uppercase; letter-spacing: .08em; }
-.auth input[name=setup_code]::placeholder, .auth input[name=recovery]::placeholder { letter-spacing: .08em; }
+.auth input[name=recovery] { text-transform: uppercase; letter-spacing: .08em; }
 @media (prefers-reduced-motion: reduce) { .auth .step { animation: none; } }
 @media (max-width: 480px) {
   .auth:has(.step) { padding: 26px 20px 22px; border-radius: 20px; } .auth .step h1 { font-size: 30px; }
