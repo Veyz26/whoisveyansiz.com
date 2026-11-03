@@ -1,6 +1,6 @@
 "use strict";
 
-const APP = "Linen";
+const APP = "KAVE Budget";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const S = { me: null, config: null, month: null, member: "all" };

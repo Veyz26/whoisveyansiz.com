@@ -1,6 +1,6 @@
-# Linen — household budgeting for South African couples
+# KAVE Budget — household budgeting for South African couples
 
-*(“Linen” is a placeholder product name.)*
+*(Reference implementation of the KAVE Budget app.)*
 
 A subscription web app for households with more than one income. Each person has their own
 salary, debit orders, monthly items and savings, and everything also rolls up into a

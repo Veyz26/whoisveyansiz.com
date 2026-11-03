@@ -35,7 +35,7 @@ final class Config
             throw new \RuntimeException('Budget config must return an array.');
         }
         self::$cfg = array_replace([
-            'app_name' => 'Linen',
+            'app_name' => 'KAVE Budget',
             'db_path' => dirname($path) . '/linen.db',
             'private_mode' => true,
             'allowed_emails' => [],
