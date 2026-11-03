@@ -1,0 +1,55 @@
+# public_html/private/ — the private budget app (PHP). Overrides the portfolio's root .htaccess.
+
+DirectoryIndex index.html
+Options -Indexes
+AddType application/manifest+json .webmanifest
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  # One canonical host: passkeys (Face ID) only work on the exact domain they were created on.
+  RewriteCond %{HTTP_HOST} ^www\.(.+)$ [NC]
+  RewriteRule ^ https://%1%{REQUEST_URI} [L,R=301]
+  # Child .htaccess rewrites replace the parent's, so repeat the HTTPS redirect here.
+  RewriteCond %{HTTPS} !=on
+  RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+  # Power BI sends its token in the Authorization header; make sure PHP sees it.
+  RewriteCond %{HTTP:Authorization} .
+  RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+  # Never serve the PHP source or anything hidden.
+  RewriteRule ^(app|data)(/|$) - [F,L]
+  RewriteRule (^|/)\. - [F,L]
+  # All API calls go through the front controller.
+  RewriteRule ^api/ index.php [L,QSA]
+</IfModule>
+
+<IfModule mod_headers.c>
+  Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+  Header always set X-Robots-Tag "noindex, nofollow"
+  Header always set Referrer-Policy "no-referrer"
+  Header always set X-Frame-Options "DENY"
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set Cache-Control "no-store"
+</IfModule>
+
+<FilesMatch "(\.(php|db|sqlite|log)|^error_log|^php-errors\.log)$">
+  Require all denied
+</FilesMatch>
+<Files "index.php">
+  Require all granted
+</Files>
+
+# The portfolio's root .htaccess caches .js/.css for a year ("immutable"). That's right for its
+# hashed build files, but the app's files keep the same names between deploys, so always revalidate
+# them here (verified on Apache: one Cache-Control header, no Expires). The API stays no-store.
+<IfModule mod_expires.c>
+  ExpiresActive Off
+</IfModule>
+<IfModule mod_headers.c>
+  <FilesMatch "\.(js|css|html|webmanifest|svg|png)$">
+    Header unset Cache-Control
+    Header unset Expires
+    Header always set Cache-Control "no-cache"
+  </FilesMatch>
+  Header always unset X-Powered-By
+  Header unset X-Powered-By
+</IfModule>
