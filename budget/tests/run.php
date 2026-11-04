@@ -334,5 +334,18 @@ $r = Statements::import($db, $hid, $pdf, null, 'auto', null, 'transactional', 'j
 check($r['rows_added'] === 5 && Statements::import($db, $hid, $pdf)['rows_added'] === 0, 'FNB PDF imports once; importing it again adds nothing');
 check(!$db->val("SELECT 1 FROM transactions WHERE description LIKE '%431835%'"), 'FNB PDF: card numbers are masked');
 
+// Central upload: a later statement from a known account goes to the same account and person.
+[$mv] = array_column(Budget::members($db, $hid), 'id');
+$feb = Statements::parse(FakePdf::build(FakePdf::fnbStatement('28 January 2027 to 27 February 2027', 2097900, [['02 Feb', 'Payshap Credit Salary', 2500000]]), ''));
+check(Statements::known_account($db, $hid, $feb) === null || Statements::known_account($db, $hid, $feb)['member_id'] === null, 'the first (joint) import is remembered by account number');
+$db->exec('UPDATE accounts SET member_id = ? WHERE household_id = ?', [$mv, $hid]);
+$known = Statements::known_account($db, $hid, $feb);
+check($known !== null && $known['member_id'] === $mv, "a later statement is matched to the account's person by bank and account number");
+$r = Statements::import_parsed($db, $hid, $feb, $known['member_id'], $known['label']);
+check($r['rows_added'] === 1 && $r['member'] === 'V' && (int)$db->val('SELECT COUNT(*) FROM accounts WHERE household_id = ?', [$hid]) === 1, '...and lands in that same account');
+check(Statements::known_account($db, $hid, ['bank' => 'fnb', 'account_last4' => '9999']) === null, 'an unknown account number is new');
+throws(fn() => Statements::parse("PK\x03\x04rest-of-a-zip"), \Linen\StatementFormatError::class, 'an Excel file gets pointed to Import Excel', 'Import Excel');
+throws(fn() => Statements::parse("\xFF\xD8\xFF\xE0jpeg"), \Linen\StatementFormatError::class, 'a photo is refused with a clear message', 'photo');
+
 echo $failures ? "\n$failures of $count checks FAILED\n" : "All $count checks passed\n";
 exit($failures ? 1 : 0);

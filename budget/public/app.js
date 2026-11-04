@@ -107,6 +107,7 @@ const I = {
   more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   share: '<path d="M12 3v12M8 7l4-4 4 4"/><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/>',
   arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  upload: '<path d="M12 15V4M7 9l5-5 5 5"/><path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/>',
   face: '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M9 9v1.5M15 9v1.5M12 9v4h-1M9.5 15.5a3.5 3.5 0 0 0 5 0"/>',
 };
 const icon = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n]}</svg>`;
@@ -577,6 +578,7 @@ function renderShell(name) {
     </aside>
     <div class="main">
       <div class="topbar" id="topbar"><h1>${p.title}</h1>
+        <button type="button" class="btn sm up-btn" id="upload" aria-label="Upload statements">${icon("upload")}<span>Upload</span></button>
         ${p.person && people.length > 1 ? `<div class="seg" role="tablist" aria-label="Whose budget">
           <button class="${S.member === "all" ? "on" : ""}" data-m="all"><span class="dot hh"></span>Household</button>
           ${people.map((m) => `<button class="${String(S.member) === String(m.id) ? "on" : ""}" data-m="${m.id}"><span class="dot ${pclass(m.id)}"></span>${esc(m.name)}</button>`).join("")}
@@ -593,6 +595,7 @@ function renderShell(name) {
   $("#prev")?.addEventListener("click", () => { S.month = addMonths(S.month, -1); route(); });
   $("#next")?.addEventListener("click", () => { S.month = addMonths(S.month, 1); route(); });
   $("#more").onclick = () => moreSheet(name);
+  $("#upload").onclick = openUpload;
   $("#logout").onclick = async () => { await api("api/auth/logout", { method: "POST", body: {} }).catch(() => {}); S.me = false; go("#/"); };
   const tb = $("#topbar");
   onscroll = () => tb.classList.toggle("scrolled", scrollY > 4);
@@ -662,7 +665,8 @@ async function pageOverview(el) {
 function emptyBudget(el) {
   el.innerHTML = `${billingBanner()}<div class="card empty"><h3>Let's build your first month</h3>
     <p>Add each person's salary and what goes out, or bring in the Excel budget you already keep. To see what actually went out, import your bank statements (FNB PDFs work as the bank sends them).</p>
-    <div class="row" style="justify-content:center;margin-top:16px"><a class="btn primary" href="#/budget">Add items</a><a class="btn" href="#/statements?tab=import">Import bank statements</a><a class="btn" href="#/settings?tab=import">Import from Excel</a></div></div>`;
+    <div class="row" style="justify-content:center;margin-top:16px"><a class="btn primary" href="#/budget">Add items</a><button type="button" class="btn" id="open-upload">Upload bank statements</button><a class="btn" href="#/settings?tab=import">Import from Excel</a></div></div>`;
+  $("#open-upload", el).onclick = openUpload;
 }
 
 // ---------------------------------------------------------------- 3D (scene3d.js, loaded on demand)
@@ -1184,29 +1188,99 @@ const fileB64 = (file) => new Promise((res, rej) => {
 });
 
 function statementImport(box) {
-  box.innerHTML = `<div class="card" style="max-width:620px"><h3>Import bank statements</h3>
-    <p class="muted small">FNB PDF statements as the bank sends them, or CSV exports from the FNB or Capitec app or online banking. Card and account numbers are reduced to the last 4 digits before they're stored. Importing the same statement twice won't duplicate anything.</p>
-    <form id="f" style="display:grid;gap:14px;margin-top:14px">
-      <label class="field">Statement files <input type="file" id="files" accept=".csv,text/csv,.pdf,application/pdf" multiple required></label>
-      <div class="grid g2"><label class="field">Whose account <select name="member"><option value="">Joint</option>${memberOptions()}</select></label>
-        <label class="field">Bank <select name="bank"><option value="auto">Detect</option><option value="fnb">FNB</option><option value="capitec">Capitec</option></select></label></div>
-      <label class="field">Account name <input type="text" name="label" placeholder="e.g. FNB Cheque" maxlength="40"></label>
-      <button class="btn primary" style="justify-self:start">Import</button></form>
-    <ul id="out" class="small" style="padding-left:18px;margin-top:14px"></ul></div>`;
-  $("#f", box).onsubmit = async (e) => {
-    e.preventDefault();
-    const f = new FormData(e.target);
-    for (const file of $("#files").files) {
-      const li = document.createElement("li"); li.textContent = `${file.name}: importing…`; $("#out").appendChild(li);
-      try {
-        const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
-        const content = isPdf ? { content_b64: await fileB64(file) } : { content: await file.text() };
-        const r = await api("api/import", { method: "POST", body: { filename: file.name, ...content, bank: f.get("bank"), account_label: f.get("label"), member_id: f.get("member") ? +f.get("member") : null } });
-        li.innerHTML = `<b>${esc(file.name)}</b>: ${r.rows_added} new, ${r.rows_duplicate} already imported (${r.first_date} to ${r.last_date})`;
-      } catch (err) { li.innerHTML = `<b>${esc(file.name)}</b>: <span class="warn">${esc(err.message)}</span>`; }
+  box.innerHTML = `<div class="card up-card">${uploaderHtml()}</div>`;
+  uploader(box);
+}
+
+// ---------------------------------------------------------------- statement upload
+// One place for every statement: any month, any number of files. The server works out the bank, account and
+// dates; an account seen before goes to the same person, and a new one is asked about once.
+function openUpload() {
+  drawer(`<div class="up-head"><h2>Upload statements</h2><button type="button" class="btn ghost sm" data-close>Close</button></div>${uploaderHtml()}`, uploader);
+}
+
+const uploaderHtml = () => `
+  <p class="muted small up-intro">Any month, as many files as you like: FNB PDFs as the bank sends them, or CSV exports from FNB or Capitec.
+    ${esc(APP)} works out the bank, account, months and whose account it is.</p>
+  <label class="drop" id="drop">
+    <input type="file" id="up-files" class="sr" multiple>
+    <span class="drop-ic">${icon("upload")}</span>
+    <strong>Choose statements</strong>
+    <span class="muted small drop-hint">or drop them here</span>
+  </label>
+  <ul class="up-list" id="up-list" aria-live="polite"></ul>
+  <div class="up-done hidden" id="up-done"><button type="button" class="btn primary" id="up-view">See transactions</button></div>`;
+
+function monthSpan(a, b) {
+  const [ma, mb] = [a.slice(0, 7), b.slice(0, 7)];
+  if (ma === mb) return monthName(ma);
+  return ma.slice(0, 4) === mb.slice(0, 4) ? `${monthName(ma, "short")} – ${monthName(mb)}` : `${monthName(ma)} – ${monthName(mb)}`;
+}
+
+function uploader(box) {
+  const list = $("#up-list", box), input = $("#up-files", box), drop = $("#drop", box);
+  const owners = {};   // "fnb:1234" -> member id, or null for joint: asked once per account
+  const waiting = {};  // the same key -> files waiting for that answer
+  let latest = null;   // newest date imported, so "See transactions" opens that month
+  let queue = Promise.resolve();
+
+  const add = (files) => {
+    for (const file of files) {
+      const li = document.createElement("li");
+      li.className = "up-item";
+      li.innerHTML = `<div class="up-file">${icon("file")}<span>${esc(file.name)}</span></div><div class="up-status muted small">Waiting…</div>`;
+      list.appendChild(li);
+      const item = { file, li };
+      queue = queue.then(() => send(item));
     }
-    await refreshMe();
   };
+  input.addEventListener("change", () => { add([...input.files]); input.value = ""; });
+  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); add([...e.dataTransfer.files]); });
+
+  async function send(item, owner) {
+    const status = $(".up-status", item.li);
+    status.className = "up-status muted small";
+    status.textContent = "Reading…";
+    try {
+      item.b64 ??= await fileB64(item.file);
+      const body = { filename: item.file.name, content_b64: item.b64, auto: true };
+      if (owner !== undefined) body.member_id = owner;
+      const r = await api("api/import", { method: "POST", body });
+      if (!latest || r.last_date > latest) latest = r.last_date;
+      status.className = "up-status small";
+      status.innerHTML = `<span class="chip good">${r.rows_added} new</span> ${esc(r.account_label)} · ${esc(monthSpan(r.first_date, r.last_date))}`
+        + (r.rows_duplicate ? ` <span class="muted">· ${r.rows_duplicate} already here</span>` : "");
+      $("#up-done", box).classList.remove("hidden");
+      await refreshMe();
+    } catch (err) {
+      if (err.data?.needs_owner) return askOwner(item, err.data);
+      status.className = "up-status small warn";
+      status.textContent = err.message;
+    }
+  }
+
+  function askOwner(item, d) {
+    const key = d.last4 ? `${d.bank}:${d.last4}` : null;
+    if (key && key in owners) return send(item, owners[key]);
+    const status = $(".up-status", item.li);
+    if (key && waiting[key]) { waiting[key].push(item); status.textContent = "Same account as above: waiting for your answer."; return; }
+    if (key) waiting[key] = [item];
+    status.className = "up-status small";
+    status.innerHTML = `<div class="ask">Whose account is ${esc(d.bank.toUpperCase())}${d.last4 ? ` ••${esc(d.last4)}` : ""}?
+        <span class="muted">${esc(monthSpan(d.first_date, d.last_date))}. You'll only be asked once.</span></div>
+      <div class="row ask-btns">${S.me.members.map((m) => `<button type="button" class="btn sm" data-owner="${m.id}"><span class="dot ${pclass(m.id)}"></span>${esc(m.name)}</button>`).join("")}
+        <button type="button" class="btn sm" data-owner="">Joint</button></div>`;
+    $$("[data-owner]", status).forEach((b) => (b.onclick = () => {
+      const owner = b.dataset.owner === "" ? null : +b.dataset.owner;
+      const items = key ? waiting[key] : [item];
+      if (key) { owners[key] = owner; delete waiting[key]; }
+      for (const it of items) queue = queue.then(() => send(it, owner));
+    }));
+  }
+
+  $("#up-view", box).onclick = () => { closeOverlays(); go(`#/statements?tab=transactions${latest ? `&m=${latest.slice(0, 7)}` : ""}`); };
 }
 
 // ---------------------------------------------------------------- debts
