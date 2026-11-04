@@ -1,7 +1,7 @@
 <?php
 /**
- * FNB and Capitec CSV statements: parse, normalise and import with de-duplication.
- * Mirrors parsers/*.py and importer.py.
+ * FNB and Capitec CSV statements, and FNB PDF statements: parse, normalise and import with de-duplication.
+ * Mirrors parsers/*.py and importer.py (the PDF reader has no Python counterpart).
  */
 declare(strict_types=1);
 
@@ -90,8 +90,11 @@ final class Statements
     /** @return array{bank:string, transactions:array, account_last4:?string, skipped_rows:int} */
     public static function parse(string $content, string $bank = 'auto'): array
     {
-        if (str_starts_with(ltrim($content), '%PDF')) {
-            throw new StatementFormatError("PDF statements aren't supported yet. Export CSV from the FNB or Capitec app instead.");
+        if (str_starts_with(ltrim(substr($content, 0, 1024)), '%PDF')) {
+            if ($bank === 'capitec') {
+                throw new StatementFormatError('For Capitec, export the statement as CSV. PDF import reads FNB statements.');
+            }
+            return self::parse_fnb_pdf($content);
         }
         if ($bank === 'auto') {
             $bank = self::detect_bank($content);
@@ -144,6 +147,126 @@ final class Statements
         }
         if (!$st['transactions']) {
             throw new StatementFormatError('No transactions found in FNB file.');
+        }
+        return $st;
+    }
+
+    /**
+     * FNB's PDF statement: a table of Date | Description | Amount (Cr when money in) | Balance (Cr/Dr) | Bank Charges.
+     * Columns are found from the table heading's x positions. The running balance, opening and closing balances
+     * and the statement's own turnover totals must all agree, or nothing is imported.
+     */
+    private static function parse_fnb_pdf(string $content): array
+    {
+        try {
+            $lines = Pdf::lines($content);
+        } catch (PdfError $e) {
+            throw new StatementFormatError($e->getMessage());
+        }
+        $text = fn(array $l) => implode(' ', array_column($l['items'], 'text'));
+        $all = implode("\n", array_map($text, $lines));
+        if (!preg_match('/First National Bank|fnb\.co\.za|\bFNB\b/i', $all)) {
+            throw new StatementFormatError('This PDF doesn\'t look like an FNB statement. PDF import reads FNB statements; for other banks, use CSV.');
+        }
+        if (!preg_match('/Statement Period\s*:\s*(\d{1,2} [A-Za-z]+ \d{4})\s+to\s+(\d{1,2} [A-Za-z]+ \d{4})/', $all, $pm)) {
+            throw new StatementFormatError("Couldn't find the statement period in this FNB PDF.");
+        }
+        [$from, $to] = [Money::parse_date($pm[1]), Money::parse_date($pm[2])];
+        $st = ['bank' => 'fnb', 'transactions' => [], 'account_last4' => null, 'skipped_rows' => 0];
+        if (preg_match('/\bAcc(?:ount)?\s*(?:Number)?\s*:\s*([\d ]{6,})/i', $all, $m)) {
+            $st['account_last4'] = self::last4($m[1]);
+        }
+        $money = fn(string $s) => preg_match('/^\d{1,3}(?:,\d{3})*\.\d{2}(?:Cr|Dr)?$/', $s) ? Money::parse_amount($s) : null;
+        $opening = preg_match('/Opening Balance\s+([\d,]+\.\d{2}(?:Cr|Dr))/', $all, $m) ? $money($m[1]) : null;
+        $closing = preg_match('/Closing Balance\s+([\d,]+\.\d{2}(?:Cr|Dr))/', $all, $m) ? $money($m[1]) : null;
+
+        $cols = null;
+        $balance = $opening;
+        $last = null;  // the previous transaction line, for descriptions that wrap
+        foreach ($lines as $l) {
+            $words = array_column($l['items'], 'text');
+            if (in_array('Description', $words, true) && in_array('Amount', $words, true) && in_array('Balance', $words, true)) {
+                $x = array_column($l['items'], 'x', 'text');
+                $cols = ['desc' => 30.0, 'amount' => $x['Amount'] - 15, 'balance' => $x['Balance'] - 10,
+                    'charges' => isset($x['Bank']) ? $x['Bank'] - 10 : $x['Balance'] + 45];
+                $last = null;
+                continue;
+            }
+            if ($cols === null) {
+                continue;
+            }
+            $first = $l['items'][0];
+            if (!preg_match('/^(\d{1,2}) ([A-Z][a-z]{2})$/', $first['text'], $dm) || $first['x'] >= $cols['desc']) {
+                // A wrapped description: text only in the description column, right under a transaction.
+                $inDesc = $l['items'] && array_filter($l['items'], fn($i) => $i['x'] < $cols['desc'] || $i['x'] >= $cols['amount']) === [];
+                if ($last !== null && $inDesc && $last['y'] - $l['y'] < 12) {
+                    $st['transactions'][count($st['transactions']) - 1]['description'] .= ' ' . implode(' ', $words);
+                    $last['y'] = $l['y'];
+                } else {
+                    $last = null;
+                }
+                continue;
+            }
+            [$desc, $amount, $credit, $bal, $balCr] = [[], null, false, null, false];
+            foreach (array_slice($l['items'], 1) as $i) {
+                if ($i['x'] < $cols['amount']) {
+                    $desc[] = $i['text'];
+                } elseif ($i['x'] < $cols['balance']) {
+                    if ($i['text'] === 'Cr') {
+                        $credit = true;
+                    } elseif (($v = $money($i['text'])) !== null) {
+                        $amount = $v;
+                    }
+                } elseif ($i['x'] < $cols['charges']) {
+                    if ($i['text'] === 'Cr') {
+                        $balCr = true;
+                    } elseif (($v = $money($i['text'])) !== null) {
+                        $bal = abs($v);
+                    }
+                }  // the Bank Charges column is a fee accrued for later, not money moving now
+            }
+            if ($bal !== null && !$balCr) {
+                $bal = -$bal;  // FNB marks credit balances "Cr"; an overdrawn balance has no marker (or "Dr")
+            }
+            if ($amount === null) {
+                $st['skipped_rows']++;
+                continue;
+            }
+            $amount = $credit ? abs($amount) : -abs($amount);
+            // The year comes from the statement period (which can run from December into January).
+            $date = null;
+            foreach ([substr($to, 0, 4), substr($from, 0, 4)] as $y) {
+                $d = Money::parse_date("{$dm[1]} {$dm[2]} $y");
+                if ($d >= date('Y-m-d', strtotime("$from -7 days")) && $d <= date('Y-m-d', strtotime("$to +7 days"))) {
+                    $date = $d;
+                    break;
+                }
+            }
+            if ($date === null) {
+                throw new StatementFormatError("A transaction dated {$dm[0]} falls outside the statement period.");
+            }
+            if ($balance !== null && $bal !== null && $balance + $amount !== $bal) {
+                throw new StatementFormatError('The amounts on this PDF don\'t add up to its running balance on ' . $date
+                    . ', so it may not have been read correctly. Nothing was imported; use the CSV export instead.');
+            }
+            $balance = $bal ?? ($balance === null ? null : $balance + $amount);
+            $st['transactions'][] = ['posted_on' => $date, 'description' => trim(implode(' ', $desc)) ?: 'FNB bank fee',
+                'amount_cents' => $amount, 'balance_cents' => $bal, 'bank_category' => null];
+            $last = ['y' => $l['y']];
+        }
+        if (!$st['transactions']) {
+            throw new StatementFormatError('No transactions found in this FNB PDF.');
+        }
+        // Cross-checks against the statement's own totals.
+        if ($closing !== null && $balance !== null && $balance !== $closing) {
+            throw new StatementFormatError("This PDF's transactions don't add up to its closing balance, so nothing was imported. Use the CSV export instead.");
+        }
+        if (preg_match('/No\. Credit Transactions\s+(\d+)\s+([\d,]+\.\d{2})Cr/', $all, $cr) && preg_match('/No\. Debit Transactions\s+(\d+)\s+([\d,]+\.\d{2})Dr/', $all, $dr)) {
+            $in = array_filter(array_column($st['transactions'], 'amount_cents'), fn($a) => $a > 0);
+            $out = array_filter(array_column($st['transactions'], 'amount_cents'), fn($a) => $a < 0);
+            if (count($in) !== (int)$cr[1] || array_sum($in) !== Money::parse_amount($cr[2]) || count($out) !== (int)$dr[1] || -array_sum($out) !== Money::parse_amount($dr[2])) {
+                throw new StatementFormatError("This PDF's transactions don't match its own totals, so nothing was imported. Use the CSV export instead.");
+            }
         }
         return $st;
     }

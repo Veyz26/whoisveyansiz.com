@@ -1176,11 +1176,18 @@ async function transactionsTab(box, sm, picker) {
   });
 }
 
+const fileB64 = (file) => new Promise((res, rej) => {
+  const r = new FileReader();
+  r.onload = () => res(String(r.result).split(",")[1]);
+  r.onerror = () => rej(new Error("Couldn't read that file."));
+  r.readAsDataURL(file);
+});
+
 function statementImport(box) {
   box.innerHTML = `<div class="card" style="max-width:620px"><h3>Import bank statements</h3>
-    <p class="muted small">CSV exports from the FNB or Capitec app or online banking. Card and account numbers are reduced to the last 4 digits before they're stored. Importing the same statement twice won't duplicate anything.</p>
+    <p class="muted small">FNB PDF statements as the bank sends them, or CSV exports from the FNB or Capitec app or online banking. Card and account numbers are reduced to the last 4 digits before they're stored. Importing the same statement twice won't duplicate anything.</p>
     <form id="f" style="display:grid;gap:14px;margin-top:14px">
-      <label class="field">Statement files <input type="file" id="files" accept=".csv,text/csv" multiple required></label>
+      <label class="field">Statement files <input type="file" id="files" accept=".csv,text/csv,.pdf,application/pdf" multiple required></label>
       <div class="grid g2"><label class="field">Whose account <select name="member"><option value="">Joint</option>${memberOptions()}</select></label>
         <label class="field">Bank <select name="bank"><option value="auto">Detect</option><option value="fnb">FNB</option><option value="capitec">Capitec</option></select></label></div>
       <label class="field">Account name <input type="text" name="label" placeholder="e.g. FNB Cheque" maxlength="40"></label>
@@ -1192,7 +1199,9 @@ function statementImport(box) {
     for (const file of $("#files").files) {
       const li = document.createElement("li"); li.textContent = `${file.name}: importing…`; $("#out").appendChild(li);
       try {
-        const r = await api("api/import", { method: "POST", body: { filename: file.name, content: await file.text(), bank: f.get("bank"), account_label: f.get("label"), member_id: f.get("member") ? +f.get("member") : null } });
+        const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+        const content = isPdf ? { content_b64: await fileB64(file) } : { content: await file.text() };
+        const r = await api("api/import", { method: "POST", body: { filename: file.name, ...content, bank: f.get("bank"), account_label: f.get("label"), member_id: f.get("member") ? +f.get("member") : null } });
         li.innerHTML = `<b>${esc(file.name)}</b>: ${r.rows_added} new, ${r.rows_duplicate} already imported (${r.first_date} to ${r.last_date})`;
       } catch (err) { li.innerHTML = `<b>${esc(file.name)}</b>: <span class="warn">${esc(err.message)}</span>`; }
     }
@@ -1296,7 +1305,7 @@ async function pageSettings(el, q) {
       <div id="xlout" style="margin-top:16px"></div></div>`;
     $("#xl").onchange = async (e) => {
       const file = e.target.files[0]; if (!file) return;
-      const b64 = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.readAsDataURL(file); });
+      const b64 = await fileB64(file);
       try {
         const p = await api("api/workbook/preview", { method: "POST", body: { content_b64: b64 } });
         const guess = (n) => S.me.members.find((m) => m.name.toLowerCase().startsWith(n.toLowerCase()))?.id ?? S.me.members[p.people.indexOf(n)]?.id;

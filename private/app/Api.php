@@ -602,7 +602,8 @@ final class Api
             Categorise::set_category($c->db, $c->hid(), (int)$id, (string)($c->body['category'] ?? ''), $c->bool('make_rule', true)), write: true);
 
         $R('POST', '/api/import', function (Ctx $c) {
-            $content = (string)($c->body['content'] ?? '');
+            // PDFs are binary, so the browser sends them base64-encoded.
+            $content = isset($c->body['content_b64']) ? (string)base64_decode((string)$c->body['content_b64'], true) : (string)($c->body['content'] ?? '');
             if (trim($content) === '') {
                 throw new ApiError(400, 'Empty file');
             }
