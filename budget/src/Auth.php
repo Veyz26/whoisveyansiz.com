@@ -71,11 +71,19 @@ final class Auth
         return in_array(strtolower(trim($email)), Config::get('allowed_emails'), true);
     }
 
+    /** Setup phrases ignore capitals, spaces and punctuation, so "Our KAVE" matches "ourkave". */
+    public const SETUP_MIN = 6;  // letters or numbers; signup is throttled and only works for invited emails
+
     public static function setup_code_ok(string $email, string $given): bool
     {
         $expected = Config::get('setup_codes')[strtolower(trim($email))] ?? '';
         $norm = fn(string $c) => strtoupper(preg_replace('/[^0-9A-Za-z]/', '', $c));
-        return $expected !== '' && strlen($norm($expected)) >= 8 && hash_equals($norm($expected), $norm($given));
+        if ($expected !== '' && strlen($norm($expected)) < self::SETUP_MIN) {
+            // A phrase this short can never match; tell the owner in the PHP error log.
+            error_log("KAVE: the setup phrase for $email in config.php needs at least " . self::SETUP_MIN . ' letters or numbers');
+            return false;
+        }
+        return $expected !== '' && hash_equals($norm($expected), $norm($given));
     }
 
     private static function record_consents(Conn $db, int $uid, array $consents): void

@@ -64,7 +64,7 @@ return [
 ```
 
 A setup code can be a random code or a passphrase (the app calls it a "setup phrase"), with at least
-8 letters or numbers: capitals, spaces and dashes are ignored, so `Our KAVE home` and `ourkavehome`
+6 letters or numbers: capitals, spaces and dashes are ignored, so `Our KAVE home` and `ourkavehome`
 match. A random one is safer, for example the output of `php -r 'echo bin2hex(random_bytes(6)), PHP_EOL;'`;
 an easy phrase only matters until both accounts exist. Being on the allowlist isn't enough to create an
 account; you also need the code for your email (you can both use the same one). Give Tiara hers in person or in a message, not by email to the
