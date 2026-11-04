@@ -309,7 +309,7 @@ throws(fn() => Statements::import($db, $hid, $csv, $mt, 'auto', 'FNB account (V)
 // --- FNB PDF statements -----------------------------------------------------------------------------
 // Dec to Jan (the year comes from the period), an overdrawn balance with no "Cr", a fee with no description,
 // a description that wraps onto a second line, and FNB's RC4 "restrictions only" protection.
-$rows = [['29 Dec', 'POS Purchase Woolworths 431835*1642 28 Dec', -45099], ['31 Dec', 'FNB App Payment To Rent', -900000],
+$rows = [['29 Dec', 'POS Purchase Woolworths 400000*9999 28 Dec', -45099], ['31 Dec', 'FNB App Payment To Rent', -900000],
     ['31 Dec', '', -1100], ['02 Jan', 'Payshap Credit Salary', 2500000, 'Acme (Pty) Ltd Jan'], ['03 Jan', 'Magtape Debit Gym', -29900]];
 $pdf = FakePdf::build(FakePdf::fnbStatement('28 December 2026 to 27 January 2027', 600000, $rows), '');
 $st = Statements::parse($pdf);
@@ -317,7 +317,7 @@ check(count($st['transactions']) === 5 && $st['account_last4'] === '1234', 'FNB 
 check(array_column($st['transactions'], 'posted_on') === ['2026-12-29', '2026-12-31', '2026-12-31', '2027-01-02', '2027-01-03'], 'FNB PDF: dates get the right year across New Year');
 check(array_column($st['transactions'], 'amount_cents') === [-45099, -900000, -1100, 2500000, -29900], 'FNB PDF: money in and out, overdraft included');
 check($st['transactions'][1]['balance_cents'] === -345099 && $st['transactions'][3]['balance_cents'] === 2153801, 'FNB PDF: an unmarked balance is overdrawn');
-check($st['transactions'][2]['description'] === 'FNB bank fee' && $st['transactions'][3]['description'] === 'Payshap Credit Salary Acme (Pty) Ltd Jan',
+check($st['transactions'][2]['description'] === 'FNB transaction fee' && $st['transactions'][3]['description'] === 'Payshap Credit Salary Acme (Pty) Ltd Jan',
     'FNB PDF: blank fee rows are named, wrapped descriptions are joined');
 throws(fn() => Statements::parse(FakePdf::build(FakePdf::fnbStatement('28 December 2026 to 27 January 2027', 600000, $rows, 1), '')),
     \Linen\StatementFormatError::class, 'FNB PDF: a balance that does not add up stops the import', 'running balance');
@@ -332,7 +332,7 @@ $db = fresh(['private_mode' => false]);
 $hid = $db->tx(fn($db) => Auth::create_household($db, 'T', ['V']));
 $r = Statements::import($db, $hid, $pdf, null, 'auto', null, 'transactional', 'jan.pdf');
 check($r['rows_added'] === 5 && Statements::import($db, $hid, $pdf)['rows_added'] === 0, 'FNB PDF imports once; importing it again adds nothing');
-check(!$db->val("SELECT 1 FROM transactions WHERE description LIKE '%431835%'"), 'FNB PDF: card numbers are masked');
+check(!$db->val("SELECT 1 FROM transactions WHERE description LIKE '%400000%'"), 'FNB PDF: card numbers are masked');
 
 // Central upload: a later statement from a known account goes to the same account and person.
 [$mv] = array_column(Budget::members($db, $hid), 'id');
@@ -346,6 +346,183 @@ check($r['rows_added'] === 1 && $r['member'] === 'V' && (int)$db->val('SELECT CO
 check(Statements::known_account($db, $hid, ['bank' => 'fnb', 'account_last4' => '9999']) === null, 'an unknown account number is new');
 throws(fn() => Statements::parse("PK\x03\x04rest-of-a-zip"), \Linen\StatementFormatError::class, 'an Excel file gets pointed to Import Excel', 'Import Excel');
 throws(fn() => Statements::parse("\xFF\xD8\xFF\xE0jpeg"), \Linen\StatementFormatError::class, 'a photo is refused with a clear message', 'photo');
+
+// --- Statements everywhere: coverage, fee averages and a budget drafted from statements ----------------------
+// Three FNB statements, 29 Dec to 31 Mar: December is a part-month (29-31), January to March are covered in full.
+$db = fresh(['private_mode' => false]);
+$hid = $db->tx(fn($db) => Auth::create_household($db, 'T', ['V', 'T']));
+[$mv, $mt] = array_column(Budget::members($db, $hid), 'id');
+$stmt = fn(string $period, int $open, array $rows) => FakePdf::build(FakePdf::fnbStatement($period, $open, $rows), '');
+$bal = 100000;
+$jan = [['29 Dec', '', -47500], ['30 Dec', 'POS Purchase Woolworths ****1234 29 Dec', -80000],
+    ['02 Jan', 'Payshap Credit Acme Payroll', 3000000], ['05 Jan', 'POS Purchase Netflix.Com ****1234 04 Jan', -19900],
+    ['10 Jan', 'POS Purchase Woolworths ****1234 09 Jan', -200000], ['15 Jan', 'Payshap Credit Gift From Gran', 50000],
+    ['20 Jan', 'Internal Debit Order Fnblife Ab12Cd34 100001', -45000], ['31 Jan', '', -47500]];
+$feb = [['02 Feb', 'Payshap Credit Acme Payroll', 3000000], ['05 Feb', 'POS Purchase Netflix.Com ****1234 04 Feb', -19900],
+    ['10 Feb', 'POS Purchase Woolworths ****1234 09 Feb', -250000], ['12 Feb', 'Payment To Investment Holiday', -100000],
+    ['20 Feb', 'Internal Debit Order Fnblife Ab12Cd34 100002', -45000], ['28 Feb', '', -47500]];
+$mar = [['02 Mar', 'Payshap Credit Acme Payroll', 3100000], ['05 Mar', 'POS Purchase Netflix.Com ****1234 04 Mar', -19900],
+    ['10 Mar', 'POS Purchase Woolworths ****1234 09 Mar', -300000], ['12 Mar', 'Payment To Investment Holiday', -100000],
+    ['20 Mar', 'Internal Debit Order Fnblife Ab12Cd34 100003', -45000], ['31 Mar', '', -47500]];
+foreach ([['29 December 2026 to 31 January 2027', $jan], ['1 February 2027 to 28 February 2027', $feb], ['1 March 2027 to 31 March 2027', $mar]] as [$period, $rows]) {
+    Statements::import($db, $hid, $stmt($period, $bal, $rows), $mv);
+    $bal += array_sum(array_column($rows, 2));
+}
+$s = new \Linen\Scope($hid);
+check(\Linen\Analysis::complete_months($db, $s) === ['2027-03', '2027-02', '2027-01'], 'a month counts as complete only when statements cover it in full');
+check(\Linen\Analysis::summary($db, $s, '2026-12')['partial'] === true && \Linen\Analysis::summary($db, $s, '2027-02')['partial'] === false, 'summary says when a month is only partly covered');
+$fees = \Linen\Analysis::fees_and_interest($db, $s, '2027-01');
+check($fees['fees_monthly_avg_cents'] === 47500 && $fees['averaged_months'] === ['2027-01'], 'fee average ignores the part-month (29-31 Dec)');
+check(\Linen\Analysis::fees_and_interest($db, $s, '2027-03')['fees_monthly_avg_cents'] === 47500, 'fees: R475 a month over three full months');
+check(Statements::merchant_key('POS Purchase Netflix.Com ****1234 04 Jan') === Statements::merchant_key('POS Purchase Netflix.Com ****1234 04 Feb'),
+    'the date FNB adds to card purchases is not part of the payee');
+check(count(array_filter(\Linen\Analysis::recurring($db, $s, '2027-03'), fn($r) => $r['merchant'] === 'NETFLIX COM')) === 1, 'Netflix is found as a regular payment');
+check($db->val("SELECT category FROM transactions WHERE description LIKE 'Payment To Investment%' LIMIT 1") === 'Transfers'
+    && $db->val("SELECT category FROM transactions WHERE description LIKE '%Fnblife%' LIMIT 1") === 'Insurance', 'FNB investment transfers and FNB Life policies are categorised');
+check($db->val("SELECT description FROM transactions WHERE posted_on = '2027-01-31' AND amount_cents = -47500") === 'FNB monthly account fee'
+    && \Linen\Analysis::fee_kind('FNB monthly account fee') === 'Monthly account fee', "the fee on a statement's last day is the monthly account fee");
+$feb2 = \Linen\Analysis::summary($db, new \Linen\Scope($hid, $mv), '2027-02');
+check($feb2['moved_cents'] === 100000 && $feb2['net_cents'] === 3000000 - 19900 - 250000 - 45000 - 47500 - 100000,
+    'came in − spent − moved to own accounts = the change in the balance');
+
+$d = Budget::draft_from_statements($db, $hid);
+check($d['months'] === ['2027-01', '2027-02', '2027-03'] && $d['members'] === ['V'], 'draft uses the complete months, for the person who owns the account');
+foreach (['2027-01', '2027-02', '2027-03'] as $m) {
+    $sm = \Linen\Analysis::summary($db, new \Linen\Scope($hid, $mv), $m);
+    $h = Budget::month_view($db, $hid, $m, $mv)['household'];
+    check($h['income_cents'] === $sm['income_cents'] && $h['expense_cents'] === $sm['spend_cents'] && $h['saving_cents'] === $sm['moved_cents']
+        && $h['surplus_cents'] === $sm['net_cents'], "drafted $m matches the statements exactly (left over = change in balance)");
+}
+$apr = array_column(Budget::month_view($db, $hid, '2027-04', $mv)['lines'], 'amount_cents', 'name');
+check(($apr['Acme Payroll'] ?? null) === 3100000 && ($apr['Netflix Com'] ?? null) === 19900 && ($apr['Groceries'] ?? null) === 250000
+    && ($apr['Moved to your own accounts'] ?? null) === 66667 && ($apr['Bank fees'] ?? null) === 47500,
+    'next month carries typical amounts (latest regular pay, average groceries and own-account moves)');
+check(Budget::draft_untouched($db, $hid, $mv), 'a fresh draft counts as untouched (new statements redraft it)');
+check(!isset($apr['Gift From Gran']), 'a one-off credit is not planned as ongoing income');
+check((int)$db->val("SELECT is_debit_order FROM budget_lines WHERE name = 'Fnblife'") === 1, 'debit orders are flagged');
+$gym = Budget::create_line($db, $hid, ['member_id' => $mv, 'kind' => 'expense', 'name' => 'Gym', 'amount_cents' => 50000, 'start_month' => '2027-01']);
+$groc = (int)$db->val("SELECT id FROM budget_lines WHERE name = 'Groceries'");
+Budget::update_line($db, $hid, $groc, ['name' => 'Food']);
+$before = (int)$db->val('SELECT COUNT(*) FROM budget_lines WHERE household_id = ?', [$hid]);
+Budget::draft_from_statements($db, $hid);
+check((int)$db->val('SELECT COUNT(*) FROM budget_lines WHERE household_id = ?', [$hid]) === $before
+    && $db->val('SELECT 1 FROM budget_lines WHERE id = ?', [$gym]) && !$db->val("SELECT 1 FROM budget_lines WHERE name = 'Groceries'"),
+    'redrafting keeps added and edited items and never adds an edited one again');
+check(Budget::draft_from_statements($db, $hid, $mt)['lines'] === 0, 'someone without statements gets nothing drafted');
+// A budget built by hand is never drafted over: its salary and the drafted income would both count.
+$db2 = fresh(['private_mode' => false]);
+$h2 = $db2->tx(fn($db) => Auth::create_household($db, 'T', ['V']));
+[$m2] = array_column(Budget::members($db2, $h2), 'id');
+Budget::create_line($db2, $h2, ['member_id' => $m2, 'kind' => 'income', 'name' => 'Salary', 'amount_cents' => 3000000, 'start_month' => '2027-01']);
+$bal = 100000;
+foreach ([['29 December 2026 to 31 January 2027', $jan], ['1 February 2027 to 28 February 2027', $feb]] as [$period, $rows]) {
+    Statements::import($db2, $h2, $stmt($period, $bal, $rows), $m2);
+    $bal += array_sum(array_column($rows, 2));
+}
+check(Budget::draft_from_statements($db2, $h2)['lines'] === 0 && (int)$db2->val('SELECT COUNT(*) FROM budget_lines') === 1, 'a hand-built budget is left alone');
+
+// Review fixes: what people did is kept, payees are recognised, rows are never lost.
+check(!Budget::draft_untouched($db, $hid, $mv), 'an edited draft is no longer untouched (new statements leave it alone)');
+$fee = (int)$db->val("SELECT id FROM budget_lines WHERE name = 'Bank fees'");
+Budget::set_paid($db, $hid, $fee, '2027-03', true);
+Budget::draft_from_statements($db, $hid);
+check((bool)$db->val('SELECT paid FROM line_status WHERE line_id = ?', [$fee]), 'ticking an item paid makes it theirs: a redraft keeps the tick');
+$db3 = fresh(['private_mode' => false]);
+$h3 = $db3->tx(fn($db) => Auth::create_household($db, 'T', ['V']));
+[$m3] = array_column(Budget::members($db3, $h3), 'id');
+$bal = 100000;
+foreach ([['29 December 2026 to 31 January 2027', $jan], ['1 February 2027 to 28 February 2027', $feb]] as [$period, $rows]) {
+    Statements::import($db3, $h3, $stmt($period, $bal, $rows), $m3);
+    $bal += array_sum(array_column($rows, 2));
+}
+Budget::draft_from_statements($db3, $h3);
+Budget::create_line($db3, $h3, ['member_id' => $m3, 'kind' => 'income', 'name' => 'Side gig', 'amount_cents' => 200000, 'start_month' => '2027-01']);
+Budget::draft_from_statements($db3, $h3);
+check((bool)$db3->val("SELECT 1 FROM budget_lines WHERE name = 'Acme Payroll'"), 'a small income of their own (a side gig) does not drop the drafted salary');
+Budget::create_line($db3, $h3, ['member_id' => $m3, 'kind' => 'income', 'name' => 'Salary', 'amount_cents' => 3000000, 'start_month' => '2027-01']);
+Budget::draft_from_statements($db3, $h3);
+check(!$db3->val("SELECT 1 FROM budget_lines WHERE name = 'Acme Payroll'"), 'their own salary of the same amount replaces the drafted one: never counted twice');
+check(Statements::merchant_key('May Fair Spar') === 'MAY FAIR SPAR' && Statements::merchant_key('Payment To Jan Botha') === 'JAN BOTHA'
+    && Statements::merchant_key('Magtape Debit Netcash123456 Virgin Active') === 'NETCASH VIRGIN ACTIVE'
+    && Statements::merchant_key('FNB App Payment To Landlord Rent Oct') === 'LANDLORD RENT', 'payee names keep real names and drop only dates, references and a trailing month');
+check(str_contains(Statements::sanitise('DebiCheck Internal D/O Carfin_Fi1234567890'), '****7890') && !str_contains(Statements::sanitise('Carfin_Fi1234567890'), '123456'),
+    'long account numbers are masked even when glued to letters');
+$rx = fn(string $m) => \Linen\Categorise::compile(\Linen\Categorise::payee_pattern($m), 'regex');
+check(preg_match($rx('APPLE COM BILL'), 'POS PURCHASE APPLE.COM/BILL ****9999') === 1 && preg_match($rx('FNB INSURE'), 'INTERNAL DEBIT ORDER FNB INSURE1234567') === 1
+    && preg_match($rx('FNB INSURE'), 'FNB INSURANCE BROKERS') === 0, 'a "remember for this payee" rule matches the payee it was made from');
+// FNB repeats the boundary day in both statements: identical fees that day, one in each file, are both kept.
+$db4 = fresh(['private_mode' => false]);
+$h4 = $db4->tx(fn($db) => Auth::create_household($db, 'T', ['V']));
+Statements::import($db4, $h4, $stmt('1 March 2027 to 31 March 2027', 100000, [['31 Mar', '', -47500], ['31 Mar', '', -550]]));
+$n = Statements::import($db4, $h4, $stmt('31 March 2027 to 30 April 2027', 51950, [['31 Mar', '', -550], ['02 Apr', 'Payshap Credit Acme Payroll', 100000]]))['rows_added'];
+check($n === 2, 'an identical fee on the boundary day in the next statement is a new row, not a duplicate');
+throws(fn() => Statements::parse(FakePdf::raw(str_repeat('[', 200) . ' (x) Tj')), \Linen\StatementFormatError::class, 'a PDF nested too deeply gets a clear error', 'too complex');
+throws(fn() => Statements::parse(FakePdf::raw("BT /F1 12 Tf (a) (b) (c) (d) (e) (f) Tm (Hello) Tj ET")), \Linen\StatementFormatError::class,
+    'odd operands in a PDF are read without warnings', 'FNB');
+
+// --- Upgrading a database from before statements fed everything (schema 4 -> 5) ---------------------------------
+$file = sys_get_temp_dir() . '/linen-v4-' . bin2hex(random_bytes(4)) . '.db';
+$pdo = new PDO("sqlite:$file");
+$pdo->exec(Db::SCHEMA);
+$old = new \Linen\Conn($pdo);
+\Linen\Categorise::seed_builtin_rules($old);
+$pdo->exec(Db::MIGRATIONS[3]);
+$pdo->exec(Db::MIGRATIONS[4]);
+$h = $old->tx(fn($db) => Auth::create_household($db, 'T', ['V']));
+$acct = $old->insert("INSERT INTO accounts (household_id, member_id, bank, label, last4) VALUES (?, NULL, 'fnb', 'FNB 1234', '1234')", [$h]);
+$imp = $old->insert('INSERT INTO imports (household_id, account_id, filename, rows_total, rows_added, rows_duplicate) VALUES (?, ?, ?, 5, 5, 0)', [$h, $acct, 'mar.pdf']);
+$userRule = $old->insert("INSERT INTO rules (household_id, pattern, match, direction, category, priority, source) VALUES (?, 'APPLE COM BILL MAR', 'word', 'out', 'Entertainment', 1000, 'user')", [$h]);
+$shortRule = $old->insert("INSERT INTO rules (household_id, pattern, match, direction, category, priority, source) VALUES (?, 'PAYSHAP CREDIT V', 'word', 'in', 'Income', 1000, 'user')", [$h]);
+$feeRule = $old->insert("INSERT INTO rules (household_id, pattern, match, direction, category, priority, source) VALUES (?, 'FNB BANK FEE', 'word', 'out', 'Other', 1000, 'user')", [$h]);
+$fuelRule = (int)$old->val("SELECT id FROM rules WHERE household_id = 0 AND pattern = 'FUEL'");
+$row = fn(string $on, string $desc, string $merchant, int $amt, int $bal, string $cat, string $src, ?int $rule) => $old->insert(
+    'INSERT INTO transactions (household_id, account_id, import_id, posted_on, description, merchant, amount_cents, balance_cents, category, category_source, rule_id, fingerprint)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [$h, $acct, $imp, $on, $desc, $merchant, $amt, $bal, $cat, $src, $rule, bin2hex(random_bytes(8))]);
+$tFee = $row('2027-03-31', 'FNB bank fee', 'FNB BANK FEE', -47500, 52500, 'Bank fees', 'rule', null);
+$tSmall = $row('2027-03-31', 'FNB bank fee', 'FNB BANK FEE', -550, 51950, 'Bank fees', 'rule', null);
+$tApple = $row('2027-03-10', 'POS Purchase Apple.Com/Bill ****9999 09 Mar', 'APPLE COM BILL MAR', -19900, 600000, 'Entertainment', 'rule', $userRule);
+$tCar = $row('2027-03-02', 'DebiCheck Internal D/O Carfin_Fi1234567890', 'INTERNAL D O', -500000, 619900, 'Other', 'none', null);
+$tFuel = $row('2027-03-05', 'Payment To Investment Fuel', 'INVESTMENT FUEL', -400000, 219900, 'Fuel & transport', 'rule', $fuelRule);
+$pdo->exec('PRAGMA user_version = 4');
+unset($old, $pdo);
+Config::set(['db_path' => $file, 'private_mode' => false, 'env' => 'development']);
+$db = Db::connect();
+$t = fn(int $id) => $db->one('SELECT * FROM transactions WHERE id = ?', [$id]);
+check((int)$db->val('PRAGMA user_version') === 5 && $db->one('SELECT period_from, period_to FROM imports')
+    === ['period_from' => '2027-03-02', 'period_to' => '2027-03-31'], 'v4 -> v5: schema upgraded, statement periods filled in from the rows');
+check($t($tFee)['description'] === 'FNB monthly account fee' && $t($tSmall)['description'] === 'FNB transaction fee', 'v4 -> v5: FNB fee rows renamed like new imports');
+check($t($tApple)['category'] === 'Entertainment' && $db->val('SELECT match FROM rules WHERE id = ?', [$userRule]) === 'regex',
+    'v4 -> v5: a category someone chose for a payee is kept, and their rule now matches that payee');
+check(str_contains($t($tCar)['description'], '****7890') && $t($tCar)['merchant'] === 'CARFIN', 'v4 -> v5: long numbers masked, payee renamed');
+check($t($tFuel)['category'] === 'Transfers', 'v4 -> v5: built-in categories reapplied (own investment account = transfer)');
+check($t($tFee)['fingerprint'] === Statements::fingerprint($acct, '2027-03-31|-47500|FNB MONTHLY ACCOUNT FEE', 52500, 1),
+    'v4 -> v5: fingerprints match a fresh import, so uploading the statement again adds nothing');
+$short = \Linen\Categorise::compile($db->val('SELECT pattern FROM rules WHERE id = ?', [$shortRule]), 'regex');
+check(preg_match($short, 'PAYSHAP CREDIT V SMITH') === 1 && preg_match($short, 'FNB APP TRANSFER FROM V SAVINGS') === 0,
+    'v4 -> v5: a payee rule never becomes broader than before (no catch-all "V")');
+$fees = \Linen\Categorise::compile($db->val('SELECT pattern FROM rules WHERE id = ?', [$feeRule]), 'regex');
+check(preg_match($fees, 'FNB TRANSACTION FEE') === 1 && preg_match($fees, 'FNB MONTHLY ACCOUNT FEE') === 1, 'v4 -> v5: a rule on the old fee name follows the new fee names');
+unset($db);
+@unlink($file);
+
+// Transfers between the household's own accounts are paired only when it's unambiguous.
+$db = fresh(['private_mode' => false]);
+$hid = $db->tx(fn($db) => Auth::create_household($db, 'T', ['V', 'T']));
+[$mv, $mt] = array_column(Budget::members($db, $hid), 'id');
+Statements::import($db, $hid, "Date,Amount,Balance,Description\n2027/03/02,-50000,1,Payment To Tiara\n2027/03/03,-50000,1,Payment To Gym\n2027/03/04,-123456,1,FNB App Payment To T Savings\n2027/03/05,-30000,1,POS Purchase Shell\n", $mv);
+Statements::import($db, $hid, "Date,Amount,Balance,Description\n2027/03/02,50000,1,Payment From V\n2027/03/03,50000,1,Payment From Mom\n2027/03/04,123456,1,Payment From V Savings\n2027/03/05,30000,1,Refund Shell\n", $mt);
+$linked = array_column($db->all('SELECT description FROM transactions WHERE is_transfer = 1 ORDER BY id'), 'description');
+check($linked === ['FNB App Payment To T Savings', 'Payment From V Savings'], 'a unique matching amount is paired; two R500s and a card purchase are not guessed');
+check(!\Linen\Categorise::specific_payee('V') && !\Linen\Categorise::specific_payee('FNB') && \Linen\Categorise::specific_payee('NETFLIX')
+    && \Linen\Categorise::specific_payee('MTN SP'), 'payee rules are only made from specific names');
+// A month only counts as complete when every account's statement for it is in.
+Statements::import($db, $hid, $stmt('1 April 2027 to 30 April 2027', 0, [['02 Apr', 'Payshap Credit Acme Payroll', 100000]]), $mv);
+$db->exec("UPDATE imports SET period_from = '2027-03-01', period_to = '2027-03-31' WHERE id <= 2");  // the two March CSVs: full month
+$cov = \Linen\Analysis::coverage($db, new \Linen\Scope($hid));
+check(($cov['2027-03'] ?? null) === 1.0 && ($cov['2027-04'] ?? null) === 0.0, "a month one account hasn't uploaded yet is not complete for the household");
+Statements::import($db, $hid, $stmt('1 July 2027 to 31 July 2027', 100000, [['02 Jul', 'Payshap Credit Acme Payroll', 100000]]), $mv);
+$cov = \Linen\Analysis::coverage($db, new \Linen\Scope($hid));
+check(($cov['2027-07'] ?? null) === 1.0, 'an account not uploaded for over two months (closed) stops holding later months back');
 
 echo $failures ? "\n$failures of $count checks FAILED\n" : "All $count checks passed\n";
 exit($failures ? 1 : 0);

@@ -183,6 +183,8 @@ final class Statements
             $lines = Pdf::lines($content);
         } catch (PdfError $e) {
             throw new StatementFormatError($e->getMessage());
+        } catch (\Throwable) {  // anything else a damaged PDF trips over: still a clear message, never a crash
+            throw new StatementFormatError("This PDF couldn't be read. Download the statement again, or use the CSV export.");
         }
         $text = fn(array $l) => implode(' ', array_column($l['items'], 'text'));
         $all = implode("\n", array_map($text, $lines));
@@ -193,7 +195,8 @@ final class Statements
             throw new StatementFormatError("Couldn't find the statement period in this FNB PDF.");
         }
         [$from, $to] = [Money::parse_date($pm[1]), Money::parse_date($pm[2])];
-        $st = ['bank' => 'fnb', 'transactions' => [], 'account_last4' => null, 'skipped_rows' => 0];
+        // The period FNB states, so a month with no transactions on some days still counts as covered.
+        $st = ['bank' => 'fnb', 'transactions' => [], 'account_last4' => null, 'skipped_rows' => 0, 'period' => [$from, $to]];
         if (preg_match('/\bAcc(?:ount)?\s*(?:Number)?\s*:\s*([\d ]{6,})/i', $all, $m)) {
             $st['account_last4'] = self::last4($m[1]);
         }
@@ -278,6 +281,19 @@ final class Statements
         if (!$st['transactions']) {
             throw new StatementFormatError('No transactions found in this FNB PDF.');
         }
+        // FNB prints its fees without a description. The biggest one on the statement's last day is the monthly
+        // account fee; the others are fees for individual transactions.
+        $fees = array_keys(array_filter($st['transactions'], fn($t) => $t['description'] === 'FNB bank fee'));
+        $monthly = null;
+        foreach ($fees as $i) {
+            $t = $st['transactions'][$i];
+            if ($t['posted_on'] === $to && $t['amount_cents'] < 0 && ($monthly === null || $t['amount_cents'] < $st['transactions'][$monthly]['amount_cents'])) {
+                $monthly = $i;
+            }
+        }
+        foreach ($fees as $i) {
+            $st['transactions'][$i]['description'] = $i === $monthly ? 'FNB monthly account fee' : 'FNB transaction fee';
+        }
         // Cross-checks against the statement's own totals.
         if ($closing !== null && $balance !== null && $balance !== $closing) {
             throw new StatementFormatError("This PDF's transactions don't add up to its closing balance, so nothing was imported. Use the CSV export instead.");
@@ -349,8 +365,11 @@ final class Statements
     }
 
     // ------------------------------------------------------------------ normalising
-    private const CARDLIKE = '/(?<![\dA-Za-z])(?:\d{4}[ -]?[\d*xX•]{4}[ -]?[\d*xX•]{4}[ -]?\d{1,7}|\d{4,6}[*xX•]+\d{4}|\d{9,})(?![\dA-Za-z])/u';
-    private const NOISE = ['POS PURCHASE', 'CARD PURCHASE', 'PURCHASE', 'POS', 'DEBIT ORDER', 'DEBICHECK',
+    // Card numbers (masked or not) on their own, and any run of 9+ digits (account or finance numbers), even glued to letters.
+    private const CARDLIKE = '/(?<![\dA-Za-z])(?:\d{4}[ -]?[\d*xX•]{4}[ -]?[\d*xX•]{4}[ -]?\d{1,7}|\d{4,6}[*xX•]+\d{4})(?![\dA-Za-z])|(?<!\d)\d{9,}(?!\d)/u';
+    // Longer prefixes first: "SEND MONEY APP DR SEND ACME CAR WASH" must lose all of its prefix.
+    private const NOISE = ['SEND MONEY APP DR SEND', 'INTERNAL DEBIT ORDER', 'INTERNAL D/O', 'PAYSHAP ACCOUNT OFF-US', 'PAYSHAP CREDIT',
+        'POS PURCHASE', 'CARD PURCHASE', 'PURCHASE', 'POS', 'DEBIT ORDER', 'DEBICHECK',
         'FNB APP PAYMENT TO', 'FNB APP TRANSFER TO', 'FNB APP TRANSFER FROM', 'FNB APP PREPAID',
         'PAYMENT TO', 'PAYMENT FROM', 'PAYMENT RECEIVED', 'INTERNET PMT TO', 'SETTLEMENT',
         'RECURRING CARD PURCHASE', 'ONLINE PURCHASE', 'FEE:', 'MAGTAPE DEBIT', 'MAGTAPE CREDIT'];
@@ -365,9 +384,12 @@ final class Statements
         return trim(preg_replace('/\s+/u', ' ', $desc));
     }
 
+    private const MONTHS = 'JANUARY|FEBRUARY|MARCH|APRIL|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER'
+        . '|JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEPT|SEP|OCT|NOV|DEC';
+
     public static function merchant_key(string $desc): string
     {
-        $s = trim(ltrim(mb_strtoupper($desc), '#'));
+        $s = str_replace('_', ' ', trim(ltrim(mb_strtoupper($desc), '#')));
         do {
             $changed = false;
             foreach (self::NOISE as $p) {
@@ -377,12 +399,23 @@ final class Statements
                 }
             }
         } while ($changed);
-        $s = preg_replace('/\*{2,}\d{0,4}/', ' ', $s);
+        $s = preg_replace('/[A-Z]*\*{2,}\d{0,4}/', ' ', $s);  // masked numbers, with any letters glued on ("FI****1234")
         $s = preg_replace('/\b\d{1,2}[\/.-]\d{1,2}([\/.-]\d{2,4})?\b/', ' ', $s);
+        $s = preg_replace('/\b\d{1,2} (?:' . self::MONTHS . ')\b/', ' ', $s);  // "23 SEP": the date FNB adds to card purchases
+        $s = preg_replace('/\b([A-Z]{4,})\d[A-Z\d]*\b/', '$1', $s);  // "INSURE1234567": keep the name, drop the ref
         $s = preg_replace('/\b[A-Z]*\d[A-Z\d]*\b/', ' ', $s);
         $s = preg_replace("/[^A-Z&' ]/", ' ', $s);
         $words = preg_split('/\s+/', trim($s), -1, PREG_SPLIT_NO_EMPTY);
+        while (count($words) > 1 && preg_match('/^(?:' . self::MONTHS . ')$/', end($words))) {
+            array_pop($words);  // "RENT OCT": the month a payment is for
+        }
         return $words ? implode(' ', array_slice($words, 0, 3)) : mb_substr(mb_strtoupper($desc), 0, 24);
+    }
+
+    /** $base is "date|amount|DESCRIPTION" (sanitised, upper case). Mirrors importer.fingerprint. */
+    public static function fingerprint(int $accountId, string $base, ?int $balance, int $occurrence): string
+    {
+        return hash('sha256', "$accountId|$base|" . ($balance !== null ? "b$balance" : $occurrence));
     }
 
     // ------------------------------------------------------------------ importing
@@ -438,18 +471,27 @@ final class Statements
                 $accountId = $db->insert('INSERT INTO accounts (household_id, member_id, bank, label, last4, kind) VALUES (?, ?, ?, ?, ?, ?)',
                     [$householdId, $memberId, $st['bank'], $label, $st['account_last4'], $kind]);
             }
-            $importId = $db->insert('INSERT INTO imports (household_id, account_id, filename, rows_total, rows_added, rows_duplicate) VALUES (?, ?, ?, ?, 0, 0)',
-                [$householdId, $accountId, $filename, count($st['transactions'])]);
+            // The dates this statement covers: its stated period (PDF) widened to any rows outside it, or the
+            // first and last row (CSV). Averages only use months that statements cover in full.
+            // A stated period is only trusted when it's about a month long; a longer one would mark empty months covered.
+            $dates = array_column($st['transactions'], 'posted_on');
+            $period = $dates ? [min($dates), max($dates)] : [null, null];
+            if ($dates && isset($st['period']) && strtotime($st['period'][1]) - strtotime($st['period'][0]) <= 35 * 86400) {
+                $period = [min($period[0], $st['period'][0]), max($period[1], $st['period'][1])];
+            }
+            $importId = $db->insert('INSERT INTO imports (household_id, account_id, filename, rows_total, rows_added, rows_duplicate, period_from, period_to)
+                VALUES (?, ?, ?, ?, 0, 0, ?, ?)', [$householdId, $accountId, $filename, count($st['transactions']), $period[0], $period[1]]);
 
-            // Identical rows in one file (two R35 coffees on one day) are told apart by occurrence number,
-            // so re-importing the same or an overlapping file is idempotent.
+            // Re-importing the same or an overlapping file is idempotent: rows are identified by their running balance
+            // (which tells apart identical rows on one day, even from different statements, as FNB repeats the boundary
+            // day) or, without one, by occurrence in the file (two R35 coffees on one day).
             $seen = [];
             $added = [];
             foreach ($st['transactions'] as $t) {
                 $desc = self::sanitise($t['description']);
                 $base = $t['posted_on'] . '|' . $t['amount_cents'] . '|' . mb_strtoupper($desc);
                 $seen[$base] = ($seen[$base] ?? 0) + 1;
-                $fp = hash('sha256', "$accountId|$base|{$seen[$base]}");
+                $fp = self::fingerprint($accountId, $base, $t['balance_cents'], $seen[$base]);
                 $n = $db->exec('INSERT OR IGNORE INTO transactions (household_id, account_id, import_id, posted_on, description, merchant,
                                 amount_cents, balance_cents, bank_category, fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                     [$householdId, $accountId, $importId, $t['posted_on'], $desc, self::merchant_key($desc), $t['amount_cents'],
@@ -471,19 +513,27 @@ final class Statements
     }
 
     /** Pair money moving between the household's own accounts and mark both legs as transfers. */
+    // Card purchases, debit orders, cash and fees are never one leg of a move between the household's own accounts.
+    private const NOT_A_TRANSFER = "description NOT LIKE '%POS PURCHASE%' AND description NOT LIKE '%CARD PURCHASE%'
+        AND description NOT LIKE '%DEBIT ORDER%' AND description NOT LIKE '%DEBICHECK%' AND description NOT LIKE '%MAGTAPE%'
+        AND description NOT LIKE '%ATM%' AND description NOT LIKE '#%' AND description NOT LIKE '%FEE%'";
+
     public static function link_transfers(Conn $db, int $householdId, int $windowDays = 3): int
     {
         $outs = $db->all("SELECT id, account_id, posted_on, amount_cents FROM transactions
-                          WHERE household_id = ? AND amount_cents < 0 AND is_transfer = 0 AND category_source != 'user'", [$householdId]);
+                          WHERE household_id = ? AND amount_cents < 0 AND is_transfer = 0 AND category_source != 'user' AND "
+            . self::NOT_A_TRANSFER, [$householdId]);
         $linked = 0;
         foreach ($outs as $o) {
             $d = new \DateTimeImmutable($o['posted_on']);
-            $match = $db->one("SELECT id FROM transactions
+            // Only an unambiguous pair: exactly one row of that amount in another account within the window, so round
+            // amounts (two R500 payments) aren't paired by guesswork.
+            $cands = $db->all("SELECT id FROM transactions
                 WHERE household_id = ? AND amount_cents = ? AND account_id != ? AND is_transfer = 0
-                  AND category_source != 'user' AND posted_on BETWEEN ? AND ?
-                ORDER BY abs(julianday(posted_on) - julianday(?)) LIMIT 1",
+                  AND category_source != 'user' AND posted_on BETWEEN ? AND ? AND " . self::NOT_A_TRANSFER . ' LIMIT 2',
                 [$householdId, -$o['amount_cents'], $o['account_id'], $d->modify("-$windowDays days")->format('Y-m-d'),
-                 $d->modify("+$windowDays days")->format('Y-m-d'), $o['posted_on']]);
+                 $d->modify("+$windowDays days")->format('Y-m-d')]);
+            $match = count($cands) === 1 ? $cands[0] : null;
             if ($match) {
                 $db->exec("UPDATE transactions SET is_transfer = 1, category = 'Transfers', category_source = 'rule' WHERE id IN (?, ?)",
                     [$o['id'], $match['id']]);

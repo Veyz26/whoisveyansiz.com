@@ -26,6 +26,7 @@ class ParsedStatement:
     transactions: list[RawTxn] = field(default_factory=list)
     account_last4: str | None = None
     skipped_rows: int = 0
+    period: tuple[date, date] | None = None  # the statement's own period, when it states one
 
 
 def read_rows(content: str) -> list[list[str]]:

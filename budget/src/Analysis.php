@@ -45,12 +45,72 @@ final class Analysis
         return self::months($db, $s)[0] ?? null;
     }
 
+    /**
+     * How much of each month the statements cover (0..1), from each import's period. Each account counts from its
+     * first statement to the newest month any account has, so a month it has no statement for (a gap, or a month
+     * not uploaded yet) counts as 0; with several accounts the least-covered one counts, so a month is only
+     * complete when every account's statements cover it.
+     * @return array<string, float> month => share of its days covered, newest first
+     */
+    public static function coverage(Conn $db, Scope $s): array
+    {
+        $sql = 'SELECT i.account_id, i.period_from, i.period_to FROM imports i JOIN accounts a ON a.id = i.account_id
+                WHERE i.household_id = ? AND i.period_from IS NOT NULL AND i.period_to IS NOT NULL';
+        $p = [$s->householdId];
+        if ($s->memberId !== null) {
+            $sql .= ' AND a.member_id = ?';
+            $p[] = $s->memberId;
+        }
+        $ranges = [];
+        foreach ($db->all($sql . ' ORDER BY i.account_id, i.period_from', $p) as $r) {
+            $ranges[$r['account_id']][] = [$r['period_from'], $r['period_to']];
+        }
+        $cov = [];
+        $perAccount = [];
+        foreach ($ranges as $list) {
+            $days = [];  // month => days covered, overlapping statements merged first
+            [$from, $to] = $list[0];
+            foreach ([...array_slice($list, 1), null] as $next) {
+                if ($next !== null && $next[0] <= date('Y-m-d', strtotime("$to +1 day"))) {
+                    $to = max($to, $next[1]);
+                    continue;
+                }
+                for ($d = $from; $d <= $to; $d = date('Y-m-d', strtotime("$end +1 day"))) {
+                    $end = min($to, date('Y-m-t', strtotime($d)));
+                    $days[substr($d, 0, 7)] = ($days[substr($d, 0, 7)] ?? 0) + (strtotime($end) - strtotime($d)) / 86400 + 1;
+                }
+                if ($next !== null) {
+                    [$from, $to] = $next;
+                }
+            }
+            $perAccount[] = $days;
+        }
+        $newest = $perAccount ? max(array_map(fn($d) => array_key_last($d), $perAccount)) : null;
+        foreach ($perAccount as $days) {
+            // An account with nothing for over two months before the newest month is closed or no longer uploaded:
+            // it counts up to its last statement only, so it doesn't make every later month incomplete.
+            $until = array_key_last($days) >= Money::add_months($newest, -2) ? $newest : array_key_last($days);
+            for ($m = array_key_first($days); $m <= $until; $m = Money::add_months($m, 1)) {
+                $cov[$m] = (float)min($cov[$m] ?? 1.0, ($days[$m] ?? 0) / (int)date('t', strtotime("$m-01")));
+            }
+        }
+        krsort($cov);
+        return $cov;
+    }
+
+    /** Months the statements cover (almost) fully: at least 90% of the days, newest first. */
+    public static function complete_months(Conn $db, Scope $s): array
+    {
+        return array_keys(array_filter(self::coverage($db, $s), fn($f) => $f >= 0.9));
+    }
+
     public static function category_totals(Conn $db, Scope $s, string $month): array
     {
         [$w, $p] = $s->sql();
         $out = [];
+        // Money back (refunds) lowers its category's spending; income isn't spending.
         foreach ($db->all("SELECT t.category, -SUM(t.amount_cents) AS spend FROM transactions t
-                WHERE $w AND substr(t.posted_on, 1, 7) = ? AND t.amount_cents < 0 AND " . self::COUNTED . ' GROUP BY t.category',
+                WHERE $w AND substr(t.posted_on, 1, 7) = ? AND t.category != 'Income' AND " . self::COUNTED . ' GROUP BY t.category HAVING spend > 0',
                 [...$p, $month]) as $r) {
             $out[$r['category']] = (int)$r['spend'];
         }
@@ -61,15 +121,16 @@ final class Analysis
     public static function totals(Conn $db, Scope $s, string $month): array
     {
         [$w, $p] = $s->sql();
-        $r = $db->one("SELECT COALESCE(SUM(CASE WHEN t.amount_cents > 0 THEN t.amount_cents END), 0) AS income,
-                              COALESCE(-SUM(CASE WHEN t.amount_cents < 0 THEN t.amount_cents END), 0) AS spend
+        $r = $db->one("SELECT COALESCE(SUM(CASE WHEN t.category = 'Income' AND t.amount_cents > 0 THEN t.amount_cents END), 0) AS income,
+                              COALESCE(-SUM(CASE WHEN t.category != 'Income' THEN t.amount_cents END), 0) AS spend
                        FROM transactions t WHERE $w AND substr(t.posted_on, 1, 7) = ? AND " . self::COUNTED, [...$p, $month]);
         return [(int)$r['income'], (int)$r['spend']];
     }
 
+    /** Up to $n complete months before $month (a part-month would drag comparisons down). */
     public static function prior_months(Conn $db, Scope $s, string $month, int $n = 3): array
     {
-        $have = array_flip(self::months($db, $s));
+        $have = array_flip(self::complete_months($db, $s));
         $out = [];
         for ($i = 1; $i <= $n; $i++) {
             $m = Money::add_months($month, -$i);
@@ -82,7 +143,8 @@ final class Analysis
 
     public static function average_by_category(Conn $db, Scope $s, string $month, int $n = 3): array
     {
-        $have = array_flip(self::months($db, $s));
+        // Complete months only; with none yet, the months that have any data.
+        $have = array_flip(self::complete_months($db, $s) ?: self::months($db, $s));
         $ms = [];
         for ($i = 0; $i < $n; $i++) {
             $m = Money::add_months($month, -$i);
@@ -123,10 +185,16 @@ final class Analysis
         [$w, $p] = $s->sql();
         $saved = (int)$db->val("SELECT COALESCE(-SUM(t.amount_cents), 0) FROM transactions t WHERE $w
             AND substr(t.posted_on, 1, 7) = ? AND t.category = 'Savings & investments' AND t.amount_cents < 0", [...$p, $month]);
+        // Money moved to (net of money back from) the household's own accounts: savings, investments and transfers.
+        // What came in, minus spending, minus this, is how much the balance changed.
+        $moved = (int)$db->val("SELECT COALESCE(-SUM(t.amount_cents), 0) FROM transactions t WHERE $w
+            AND substr(t.posted_on, 1, 7) = ? AND NOT (" . self::COUNTED . ')', [...$p, $month]);
         $uncat = (int)$db->val("SELECT COUNT(*) FROM transactions t WHERE $w AND substr(t.posted_on, 1, 7) = ? AND t.category = 'Other'",
             [...$p, $month]);
+        $cov = self::coverage($db, $s)[$month] ?? null;
         return [
-            'month' => $month, 'income_cents' => $income, 'spend_cents' => $spend, 'net_cents' => $income - $spend,
+            'month' => $month, 'coverage' => $cov === null ? null : round($cov, 2), 'partial' => $cov !== null && $cov < 0.9,
+            'income_cents' => $income, 'spend_cents' => $spend, 'moved_cents' => $moved, 'net_cents' => $income - $spend - $moved,
             'saved_cents' => $saved, 'prior_months' => $priors,
             'prior_spend_avg_cents' => $avg(array_column($priorTotals, 1)),
             'prior_income_avg_cents' => $avg(array_column($priorTotals, 0)),
@@ -163,24 +231,31 @@ final class Analysis
             WHERE $w AND t.category IN ('Bank fees', 'Interest charged') AND t.amount_cents < 0
               AND substr(t.posted_on, 1, 7) IN (" . Conn::placeholders($ms) . ') ORDER BY t.posted_on DESC', [...$p, ...$ms]);
         $per = array_fill_keys($ms, ['fees_cents' => 0, 'interest_cents' => 0]);
+        foreach ($rows as $r) {
+            $per[substr($r['posted_on'], 0, 7)][$r['category'] === 'Bank fees' ? 'fees_cents' : 'interest_cents'] -= (int)$r['amount_cents'];
+        }
+        // Averages over the months in the window that statements cover in full (a statement starting on the
+        // 28th must not count as a whole month of fees); with none, over the months that have any data.
+        $complete = array_values(array_intersect($ms, self::complete_months($db, $s)));
+        $use = $complete ?: array_values(array_intersect($ms, self::months($db, $s)));
+        $nm = max(1, count($use));
+        $inUse = fn(array $r) => in_array(substr($r['posted_on'], 0, 7), $use, true);
         $kinds = [];
         $interest = [];
         foreach ($rows as $r) {
-            $m = substr($r['posted_on'], 0, 7);
+            if (!$inUse($r)) {
+                continue;
+            }
             $amt = -(int)$r['amount_cents'];
             if ($r['category'] === 'Bank fees') {
-                $per[$m]['fees_cents'] += $amt;
                 $k = self::fee_kind($r['description']);
                 $kinds[$k] ??= ['count' => 0, 'total_cents' => 0];
                 $kinds[$k]['count']++;
                 $kinds[$k]['total_cents'] += $amt;
             } else {
-                $per[$m]['interest_cents'] += $amt;
                 $interest[$r['account']] = ($interest[$r['account']] ?? 0) + $amt;
             }
         }
-        $have = array_flip(self::months($db, $s));
-        $nm = max(1, count(array_filter($ms, fn($m) => isset($have[$m]))));
         $fk = [];
         foreach ($kinds as $k => $v) {
             $fk[] = ['kind' => $k, ...$v, 'monthly_avg_cents' => Money::rnd($v['total_cents'] / $nm), 'avoidable' => $k !== 'Monthly account fee' && $k !== 'Other fees'];
@@ -196,9 +271,9 @@ final class Analysis
             $perList[] = ['month' => $m, ...$per[$m]];
         }
         return [
-            'months' => $ms, 'per_month' => $perList, 'fee_kinds' => $fk, 'interest_by_account' => $ia,
-            'fees_monthly_avg_cents' => Money::rnd(array_sum(array_column($per, 'fees_cents')) / $nm),
-            'interest_monthly_avg_cents' => Money::rnd(array_sum(array_column($per, 'interest_cents')) / $nm),
+            'months' => $ms, 'averaged_months' => $use, 'per_month' => $perList, 'fee_kinds' => $fk, 'interest_by_account' => $ia,
+            'fees_monthly_avg_cents' => Money::rnd(array_sum(array_map(fn($m) => $per[$m]['fees_cents'], $use)) / $nm),
+            'interest_monthly_avg_cents' => Money::rnd(array_sum(array_map(fn($m) => $per[$m]['interest_cents'], $use)) / $nm),
         ];
     }
 
@@ -231,7 +306,7 @@ final class Analysis
             }
             $last = end($txns);
             $desc = mb_strtoupper($last['description']);
-            $isDo = str_contains($desc, 'DEBIT ORDER') || str_contains($desc, 'DEBICHECK');
+            $isDo = str_contains($desc, 'DEBIT ORDER') || str_contains($desc, 'DEBICHECK') || str_contains($desc, 'MAGTAPE DEBIT');
             if (in_array($last['category'], self::DISCRETIONARY, true) && !$isDo) {
                 continue;
             }

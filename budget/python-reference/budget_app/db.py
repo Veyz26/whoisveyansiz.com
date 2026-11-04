@@ -118,6 +118,8 @@ CREATE TABLE IF NOT EXISTS budget_lines (
     start_month     TEXT NOT NULL,          -- YYYY-MM
     end_month       TEXT,                   -- last month it applies, NULL = ongoing
     sort            INTEGER NOT NULL DEFAULT 0,
+    source          TEXT,                   -- 'statements' when drafted from statements (and not edited since)
+    draft_key       TEXT,                   -- what it was drafted from (PHP's draft_from_statements), kept after edits
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS ix_lines_household ON budget_lines (household_id);
@@ -171,7 +173,9 @@ CREATE TABLE IF NOT EXISTS imports (
     imported_at     TEXT NOT NULL DEFAULT (datetime('now')),
     rows_total      INTEGER NOT NULL,
     rows_added      INTEGER NOT NULL,
-    rows_duplicate  INTEGER NOT NULL
+    rows_duplicate  INTEGER NOT NULL,
+    period_from     TEXT,                   -- dates this statement covers (YYYY-MM-DD)
+    period_to       TEXT
 );
 
 -- household_id 0 = built-in rules shared by everyone.
