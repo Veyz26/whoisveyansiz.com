@@ -90,6 +90,7 @@ final class Statements
     /** @return array{bank:string, transactions:array, account_last4:?string, skipped_rows:int} */
     public static function parse(string $content, string $bank = 'auto'): array
     {
+        self::refuse_non_statements($content);
         if (str_starts_with(ltrim(substr($content, 0, 1024)), '%PDF')) {
             if ($bank === 'capitec') {
                 throw new StatementFormatError('For Capitec, export the statement as CSV. PDF import reads FNB statements.');
@@ -104,6 +105,26 @@ final class Statements
             'capitec' => self::parse_capitec($content),
             default => throw new StatementFormatError('Unknown bank'),
         };
+    }
+
+    /** Files people may pick by mistake get a message that says what to do instead. */
+    private static function refuse_non_statements(string $content): void
+    {
+        $head = substr($content, 0, 16);
+        if (str_starts_with(ltrim(substr($content, 0, 1024)), '%PDF')) {
+            return;
+        }
+        $use = 'Use the PDF statement from FNB, or a CSV export from your banking app.';
+        $msg = match (true) {
+            str_starts_with($head, "PK\x03\x04") => 'This looks like an Excel or zip file. For your budget workbook, use Settings → Import Excel. ' . $use,
+            str_starts_with($head, "\xFF\xD8\xFF"), str_starts_with($head, "\x89PNG"), substr($head, 4, 4) === 'ftyp' => "This looks like a photo. $use",
+            str_starts_with($head, "\xD0\xCF\x11\xE0") => "This looks like an old Excel or Word file. $use",
+            str_contains(substr($content, 0, 2048), "\0") => "This file isn't a statement this app can read. $use",
+            default => null,
+        };
+        if ($msg !== null) {
+            throw new StatementFormatError($msg);
+        }
     }
 
     private static function parse_fnb(string $content): array
@@ -368,7 +389,28 @@ final class Statements
     public static function import(Conn $db, int $householdId, string $content, ?int $memberId = null, string $bank = 'auto',
                                   ?string $accountLabel = null, string $kind = 'transactional', ?string $filename = null): array
     {
-        $st = self::parse($content, $bank);
+        return self::import_parsed($db, $householdId, self::parse($content, $bank), $memberId, $accountLabel, $kind, $filename);
+    }
+
+    /**
+     * The household's account this statement belongs to, matched by bank and account number, so later statements
+     * go to the same account and person without asking. Null when it's new (or the file has no account number).
+     * @return ?array{id:int, member_id:?int, label:string}
+     */
+    public static function known_account(Conn $db, int $householdId, array $st): ?array
+    {
+        if (!$st['account_last4']) {
+            return null;
+        }
+        $a = $db->one('SELECT id, member_id, label FROM accounts WHERE household_id = ? AND bank = ? AND last4 = ? ORDER BY id LIMIT 1',
+            [$householdId, $st['bank'], $st['account_last4']]);
+        return $a ? ['id' => (int)$a['id'], 'member_id' => $a['member_id'] === null ? null : (int)$a['member_id'], 'label' => $a['label']] : null;
+    }
+
+    /** Imports an already-parsed statement (see parse()). */
+    public static function import_parsed(Conn $db, int $householdId, array $st, ?int $memberId = null, ?string $accountLabel = null,
+                                         string $kind = 'transactional', ?string $filename = null): array
+    {
         return $db->tx(function (Conn $db) use ($st, $householdId, $memberId, $accountLabel, $kind, $filename) {
             $who = null;
             if ($memberId !== null) {
@@ -422,7 +464,7 @@ final class Statements
             self::link_transfers($db, $householdId);
             $dates = array_column($st['transactions'], 'posted_on');
             sort($dates);
-            return ['account_id' => $accountId, 'bank' => $st['bank'], 'rows_total' => count($st['transactions']),
+            return ['account_id' => $accountId, 'account_label' => $label, 'member' => $who, 'bank' => $st['bank'], 'rows_total' => count($st['transactions']),
                 'rows_added' => count($added), 'rows_duplicate' => $dupes, 'skipped_rows' => $st['skipped_rows'],
                 'first_date' => $dates[0] ?? null, 'last_date' => end($dates) ?: null];
         });

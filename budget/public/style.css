@@ -169,6 +169,28 @@ label.field { display: grid; gap: 6px; font-size: 13px; color: var(--text-2); fo
 .consents { display: grid; gap: 10px; padding: 14px; background: var(--surface-2); border-radius: var(--radius-sm); border: 1px solid var(--border); }
 .error { color: var(--warn); font-size: 14px; min-height: 0; }
 
+/* Statement upload: one panel for every month and file (top bar "Upload", Statements → Import). */
+.up-btn svg { width: 16px; height: 16px; }
+.up-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.up-head h2 { margin: 0; }
+.up-card { max-width: 640px; }
+.up-intro { margin: 0 0 16px; line-height: 1.5; }
+.drop { position: relative; display: grid; justify-items: center; gap: 4px; padding: 26px 16px; text-align: center; cursor: pointer;
+  border: 1.5px dashed var(--border-strong); border-radius: 16px; background: var(--surface-2); transition: border-color .2s, background .2s; }
+.drop:hover, .drop.over, .drop:focus-within { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface-2)); }
+.drop-ic { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; background: var(--ink); color: var(--ink-text); margin-bottom: 6px; }
+.drop-ic svg { width: 20px; height: 20px; }
+.up-list { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 8px; }
+.up-item { padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; display: grid; gap: 6px; }
+.up-file { display: flex; align-items: center; gap: 8px; font-size: 14px; min-width: 0; }
+.up-file svg { flex: none; width: 16px; height: 16px; color: var(--muted); }
+.up-file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.up-status { line-height: 1.5; }
+.up-status .ask { margin-bottom: 8px; color: var(--text); }
+.up-status .ask .muted { display: block; }
+.up-done { margin-top: 16px; }
+@media (hover: none) { .drop-hint { display: none; } }  /* phones can't drag files in */
+
 /* Sign-in card (private mode): one short step at a time. */
 .auth:has(.step) { max-width: 410px; padding: 30px 30px 26px; border-radius: 24px; box-shadow: 0 1px 0 rgb(255 255 255 / .04) inset, 0 30px 70px -36px rgb(40 26 16 / .45); }
 .auth .step { display: grid; animation: step-in .32s var(--ease) both; }
@@ -405,7 +427,7 @@ pre.code { background: var(--surface-2); border: 1px solid var(--border); border
   .features { grid-template-columns: 1fr; }
   .hide-sm { display: none; }
   .mock { display: none; }
-  .topbar h1 { font-size: 22px; flex-basis: 100%; }
+  .topbar h1 { font-size: 22px; flex-basis: calc(100% - 110px); }  /* room for the Upload button beside it */
 }
 
 /* private area additions */
