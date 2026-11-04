@@ -661,8 +661,8 @@ async function pageOverview(el) {
 
 function emptyBudget(el) {
   el.innerHTML = `${billingBanner()}<div class="card empty"><h3>Let's build your first month</h3>
-    <p>Add each person's salary and what goes out, or bring in the Excel budget you already keep.</p>
-    <div class="row" style="justify-content:center;margin-top:16px"><a class="btn primary" href="#/budget">Add items</a><a class="btn" href="#/settings?tab=import">Import from Excel</a></div></div>`;
+    <p>Add each person's salary and what goes out, or bring in the Excel budget you already keep. To see what actually went out, import your bank statements (FNB PDFs work as the bank sends them).</p>
+    <div class="row" style="justify-content:center;margin-top:16px"><a class="btn primary" href="#/budget">Add items</a><a class="btn" href="#/statements?tab=import">Import bank statements</a><a class="btn" href="#/settings?tab=import">Import from Excel</a></div></div>`;
 }
 
 // ---------------------------------------------------------------- 3D (scene3d.js, loaded on demand)
@@ -1119,7 +1119,7 @@ async function pageStatements(el, q) {
   if (tab === "import") return statementImport(box);
   const months = S.me.statement_months;
   if (!months.length) {
-    box.innerHTML = `<div class="card empty"><h3>No statements yet</h3><p>Import CSV exports from the FNB or Capitec app to compare your plan with what actually went out.</p><a class="btn primary" style="margin-top:12px" href="#/statements?tab=import">Import a statement</a></div>`;
+    box.innerHTML = `<div class="card empty"><h3>No statements yet</h3><p>Import your FNB PDF statements, or CSV exports from the FNB or Capitec app, to compare your plan with what actually went out.</p><a class="btn primary" style="margin-top:12px" href="#/statements?tab=import">Import a statement</a></div>`;
     return;
   }
   const sm = q.get("m") && months.includes(q.get("m")) ? q.get("m") : months[0];
