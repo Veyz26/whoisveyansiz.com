@@ -607,12 +607,27 @@ final class Api
             if (trim($content) === '') {
                 throw new ApiError(400, 'Empty file');
             }
+            $filename = mb_substr((string)($c->body['filename'] ?? ''), 0, 120);
             try {
-                $r = Statements::import($c->db, $c->hid(), $content, $c->int('member_id', false), (string)($c->body['bank'] ?? 'auto'),
-                    $c->body['account_label'] ?? null, 'transactional', mb_substr((string)($c->body['filename'] ?? ''), 0, 120));
+                $st = Statements::parse($content, (string)($c->body['bank'] ?? 'auto'));
             } catch (StatementFormatError $e) {
                 throw new ApiError(422, $e->getMessage());
             }
+            $memberId = $c->int('member_id', false);
+            $label = $c->body['account_label'] ?? null;
+            // auto: a statement from an account seen before goes to that account and person. A new account needs
+            // its owner once; the answer comes back as member_id (null = joint).
+            if (!empty($c->body['auto'])) {
+                $known = Statements::known_account($c->db, $c->hid(), $st);
+                if ($known) {
+                    [$memberId, $label] = [$known['member_id'], $known['label']];
+                } elseif (!array_key_exists('member_id', $c->body)) {
+                    $dates = array_column($st['transactions'], 'posted_on');
+                    return new Raw(json_encode(['error' => 'Whose account is this?', 'needs_owner' => true, 'bank' => $st['bank'],
+                        'last4' => $st['account_last4'], 'first_date' => min($dates), 'last_date' => max($dates)]), 'application/json', null, 409);
+                }
+            }
+            $r = Statements::import_parsed($c->db, $c->hid(), $st, $memberId, $label, 'transactional', $filename);
             $c->db->audit($c->hid(), $c->uid(), 'statement.imported', "{$r['rows_added']} new rows");
             return $r;
         }, write: true);
