@@ -56,6 +56,20 @@ final class FakePdf
         return $out;
     }
 
+    /** A one-page PDF whose content stream is exactly $content (uncompressed, unprotected), for testing odd input. */
+    public static function raw(string $content): string
+    {
+        $objs = [1 => '<< /Type /Catalog /Pages 2 0 R >>', 2 => '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+            3 => '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+            4 => '<< /Length ' . strlen($content) . " >>\nstream\n$content\nendstream",
+            5 => '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>'];
+        $out = "%PDF-1.4\n";
+        foreach ($objs as $num => $body) {
+            $out .= "$num 0 obj\n$body\nendobj\n";
+        }
+        return $out . "trailer\n<< /Size 6 /Root 1 0 R >>\n%%EOF\n";
+    }
+
     /** Standard security handler, revision 3: PDF 1.7 algorithms 2, 3 and 5. */
     private static function security(string $user, string $owner, string $id): array
     {

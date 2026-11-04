@@ -617,8 +617,10 @@ function billingBanner() {
 
 // ---------------------------------------------------------------- overview
 async function pageOverview(el) {
-  const [v, f, g] = await Promise.all([
+  const hasActuals = S.me.statement_months.includes(S.month);
+  const [v, f, g, a] = await Promise.all([
     api(`api/budget?month=${S.month}${memberQ()}`), api(`api/forecast?month=${S.month}${memberQ()}`), api(`api/goals?month=${S.month}`),
+    hasActuals ? api(`api/actuals?month=${S.month}${memberQ()}`) : null,
   ]);
   if (!v.lines.length) return emptyBudget(el);
   const hh = v.household;
@@ -636,6 +638,7 @@ async function pageOverview(el) {
       <div class="card kpi"><div class="label">Left over</div><div class="value ${left < 0 ? "warn" : ""}">${zar(left)}</div>
         <div class="sub">Next month: ${zar(f.next.household.surplus_cents)}</div></div>
     </div>
+    ${a?.has_data ? actualsCard(a) : ""}
     ${jarsCard(v)}
     ${!single && v.people.length > 1 ? `<div class="people" style="margin-bottom:18px">${v.people.map((p) => `
       <div class="card person ${pclass(p.id)}"><div class="card-head"><h3><span class="dot ${pclass(p.id)}"></span> ${esc(p.name)}</h3>
@@ -662,11 +665,51 @@ async function pageOverview(el) {
   mountJars(v);
 }
 
+// What the statements show for the month, next to the plan. Came in − spent − moved = left over, which is how much
+// the balance changed, so it can be checked against the statement.
+function actualsCard(a) {
+  const s = a.summary;
+  const moved = s.moved_cents >= 0 ? ["Moved to your own accounts", s.moved_cents] : ["Back from your own accounts", -s.moved_cents];
+  return `<div class="card actuals">
+    <div class="card-head"><h3>From your statements</h3><a class="small" href="#/statements?tab=transactions&m=${S.month}">See transactions</a></div>
+    <div class="actuals-row">
+      <div><span>Came in</span><b>${zar(s.income_cents)}</b></div>
+      <div><span>Spent</span><b>${zar(s.spend_cents)}</b></div>
+      <div><span>${moved[0]}</span><b>${zar(moved[1])}</b></div>
+      <div><span>Left over</span><b class="${s.net_cents < 0 ? "warn" : ""}">${zar(s.net_cents)}</b></div>
+    </div>
+    <p class="small muted">From ${a.accounts.map(esc).join(", ")}.${a.missing.length ? ` No statements yet from ${a.missing.map(esc).join(" or ")}.` : ""}
+      Money moved to your own accounts (pockets, savings, investments) isn't spending; what's spent from those accounts shows once you upload their statements.</p>
+    ${s.partial ? `<p class="small muted">Your statements cover only part of ${esc(monthName(S.month))}, so these totals are incomplete.</p>` : ""}
+  </div>`;
+}
+
 function emptyBudget(el) {
+  const have = S.me.statement_months.length > 0;
   el.innerHTML = `${billingBanner()}<div class="card empty"><h3>Let's build your first month</h3>
-    <p>Add each person's salary and what goes out, or bring in the Excel budget you already keep. To see what actually went out, import your bank statements (FNB PDFs work as the bank sends them).</p>
-    <div class="row" style="justify-content:center;margin-top:16px"><a class="btn primary" href="#/budget">Add items</a><button type="button" class="btn" id="open-upload">Upload bank statements</button><a class="btn" href="#/settings?tab=import">Import from Excel</a></div></div>`;
-  $("#open-upload", el).onclick = openUpload;
+    <p>${have
+      ? `Your statements are in. ${esc(APP)} can draft each person's budget from them: income, debit orders, bank fees and everyday spending by category. You can change anything afterwards.`
+      : "Upload your bank statements (FNB PDFs work as the bank sends them) and your budget is drafted from them, or add each person's salary and what goes out yourself, or bring in the Excel budget you already keep."}</p>
+    <div class="row" style="justify-content:center;margin-top:16px">
+      ${have ? `<button type="button" class="btn primary" id="draft">Build my budget from statements</button>` : `<button type="button" class="btn primary" id="open-upload">Upload bank statements</button>`}
+      <a class="btn" href="#/budget">Add items</a><a class="btn" href="#/settings?tab=import">Import from Excel</a></div>
+    <div class="error" id="err" style="margin-top:10px"></div></div>`;
+  $("#open-upload", el)?.addEventListener("click", openUpload);
+  $("#draft", el)?.addEventListener("click", (e) => draftBudget(e.currentTarget, $("#err", el)));
+}
+
+async function draftBudget(btn, err) {
+  btn.disabled = true;
+  try {
+    const r = await api("api/budget/draft", { method: "POST", body: {} });
+    if (!r.lines) {
+      err.textContent = "No month is fully covered by your statements yet. Upload the statement for the month before or after, then try again.";
+      btn.disabled = false;
+      return;
+    }
+    toast(`Budget drafted from ${monthSpan(r.months[0] + "-01", r.months.at(-1) + "-01")}`);
+    route();
+  } catch (e) { err.textContent = e.message; btn.disabled = false; }
 }
 
 // ---------------------------------------------------------------- 3D (scene3d.js, loaded on demand)
@@ -791,7 +834,20 @@ async function pageBudget(el) {
       <div style="min-width:220px;flex:0 1 300px"><div class="small muted" style="margin-bottom:6px">${v.progress.paid} of ${v.progress.total} paid · ${zar(v.progress.paid_cents)}</div>
         <div class="meter good"><i style="width:${pct(v.progress.paid, v.progress.total)}%"></i></div></div>
     </div></div>
+    ${v.lines.some((l) => l.draft_key) ? `<div class="row draft-row"><span class="small muted">Items marked “from statements” were drafted from your bank statements.</span>
+      <button type="button" class="btn sm" id="redraft">Redraft from statements</button></div>` : ""}
     <div class="sheet">${v.people.map((p) => personColumn(p)).join("")}</div>`;
+  $("#redraft", el)?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;  // e.currentTarget is null once the await below has run
+    if (!confirm("Redraft from your statements? Items you added, changed, ticked as paid or linked to a goal stay as they are.")) return;
+    btn.disabled = true;
+    try {
+      const r = await api("api/budget/draft", { method: "POST", body: {} });
+      toast(r.lines ? `${r.lines} items drafted from ${monthSpan(r.months[0] + "-01", r.months.at(-1) + "-01")}`
+        : r.members.length ? "Nothing new to draft: your own items already cover it" : "No month is fully covered by statements yet");
+      route();
+    } catch (err) { fail(err); btn.disabled = false; }
+  });
   $$(".item input[type=checkbox]", el).forEach((cb) => {
     cb.onclick = (e) => e.stopPropagation();
     cb.onchange = async () => {
@@ -809,7 +865,8 @@ function personColumn(p) {
     const up = (l.change_cents > 0) === (l.kind !== "income");
     const chg = incoming ? "" : l.change_cents ? `<small class="${up ? "warn" : "good"}">${zar(l.change_cents, { signed: true })}</small>`
       : l.is_new ? `<small class="muted">new</small>` : l.ends_this_month ? `<small class="muted">last month</small>` : "";
-    const sub = incoming ? `from ${esc(l.member_name)}` : [l.kind === "transfer" ? `to ${esc(l.to_member_name)}` : "", l.is_debit_order ? "debit order" : "", esc(l.notes || "")].filter(Boolean).join(" · ");
+    const sub = incoming ? `from ${esc(l.member_name)}` : [l.kind === "transfer" ? `to ${esc(l.to_member_name)}` : "", l.is_debit_order ? "debit order" : "",
+      l.source === "statements" ? "from statements" : "", esc(l.notes || "")].filter(Boolean).join(" · ");
     const isIn = l.kind === "income" || incoming;
     return `<div class="item ${l.paid && !incoming ? "paid" : ""} ${isIn ? "income" : ""}" ${incoming ? "" : `data-id="${l.id}"`}>
       ${isIn ? "<span></span>" : `<input type="checkbox" data-id="${l.id}" ${l.paid ? "checked" : ""} aria-label="Mark ${esc(l.name)} paid">`}
@@ -820,7 +877,7 @@ function personColumn(p) {
     <div class="col-head"><h2><span class="dot ${cls}"></span>${esc(p.name)}</h2><button class="btn sm" data-add="${p.id}">+ Add item</button></div>
     ${p.sections.map((s) => `<div class="sec-name">${esc(s.name)}</div>${s.lines.map((l) => itemRow(l)).join("")}`).join("")}
     ${p.incoming_transfers.length ? `<div class="sec-name">From partner</div>${p.incoming_transfers.map((l) => itemRow(l, true)).join("")}` : ""}
-    ${!p.sections.length ? `<div class="add-row muted">Nothing here yet. Start with ${esc(p.name)}'s salary.</div>` : ""}
+    ${!p.sections.length ? `<div class="add-row muted">Nothing here yet. Upload ${esc(p.name)}'s statements, or start with their salary.</div>` : ""}
     <div class="col-foot"><div>In<b>${zar(p.money_in_cents)}</b></div><div>Out<b>${zar(p.money_out_cents)}</b></div>
       <div>Left<b class="${p.surplus_cents < 0 ? "warn" : "good"}">${zar(p.surplus_cents)}</b></div></div>
   </section>`;
@@ -1013,12 +1070,14 @@ function drawProjection(box, proj) {
     : [{ name: "Left over", color: "var(--accent)", vals: proj.map((m) => m.household_surplus_cents) }];
   const W = 520, H = 230, L = 50, B = 26, T = 10, R = 6;
   const all = series.flatMap((s) => s.vals);
-  const step = niceStep(Math.max(...all.map(Math.abs), 1));
+  // At least R1 000 of scale: with every month at R0 the steps would be fractions of a cent, and the extra
+  // gridlines and "R0" labels landed above the chart, over the cards before it.
+  const step = niceStep(Math.max(...all.map(Math.abs), 100000));
   const max = Math.max(step, Math.ceil(Math.max(0, ...all) / step) * step);
   const min = Math.floor(Math.min(0, ...all) / step) * step;
   const y = (v) => T + ((H - T - B) * (max - v)) / (max - min);
-  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Money left over per month" }, box);
-  for (let v = min; v <= max + 1; v += step) {
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Money left over per month", overflow: "hidden" }, box);
+  for (let v = min; v <= max + step / 2; v += step) {
     svgEl("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), class: v === 0 ? "zero" : "grid" }, svg);
     svgEl("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, svg).textContent = axisLabel(v);
   }
@@ -1255,7 +1314,8 @@ function uploader(box) {
       if (!latest || r.last_date > latest) latest = r.last_date;
       status.className = "up-status small";
       status.innerHTML = `<span class="chip good">${r.rows_added} new</span> ${esc(r.account_label)} · ${esc(monthSpan(r.first_date, r.last_date))}`
-        + (r.rows_duplicate ? ` <span class="muted">· ${r.rows_duplicate} already here</span>` : "");
+        + (r.rows_duplicate ? ` <span class="muted">· ${r.rows_duplicate} already here</span>` : "")
+        + (r.drafted ? `<div class="good">Budget drafted from your statements (${r.drafted} items).</div>` : "");
       $("#up-done", box).classList.remove("hidden");
       await refreshMe();
     } catch (err) {

@@ -40,6 +40,17 @@ final class Pdf
     private bool $aes = false;
     /** @var array<string, array> decoded fonts by object number */
     private array $fonts = [];
+    /** @var array<int, string> decoded streams by object number (pages can share one) */
+    private array $streams = [];
+    // Limits, so a broken or hostile PDF is refused with a message instead of exhausting memory or time.
+    private const MAX_INFLATED = 64 * 1024 * 1024;  // all decompressed streams together
+    private const MAX_OPS = 2_000_000;               // drawing operations in all content
+    private const MAX_FORMS = 2_000;                 // form XObjects drawn
+    private const MAX_CMAP = 200_000;                // ToUnicode entries per font
+    private const MAX_TEXT = 200_000;                // pieces of text (a real statement has a few hundred)
+    private int $inflated = 0;
+    private int $ops = 0;
+    private int $forms = 0;
 
     private function __construct(private string $d) {}
 
@@ -166,6 +177,11 @@ final class Pdf
         if (!is_array($s) || !isset($s['raw'])) {
             return '';
         }
+        return $this->streams[$num] ??= $this->decode($s, $num);
+    }
+
+    private function decode(array $s, int $num): string
+    {
         $raw = $s['raw'];
         $isXref = ($s['dict']['Type'] ?? '') === '/XRef';
         if ($this->key !== null && !$isXref) {
@@ -175,13 +191,15 @@ final class Pdf
         foreach ((array)(is_string($filters) ? [$filters] : $filters) as $f) {
             $f = $this->resolve($f);
             if ($f === '/FlateDecode' || $f === '/Fl') {
-                $out = @gzuncompress($raw);
+                $room = self::MAX_INFLATED - $this->inflated;
+                $out = @gzuncompress($raw, $room);
                 if ($out === false) {
-                    $out = @gzinflate(substr($raw, 2));  // tolerate a damaged checksum at the end
+                    $out = @gzinflate(substr($raw, 2), $room);  // tolerate a damaged checksum at the end
                 }
                 if ($out === false) {
-                    throw new PdfError("Part of this PDF couldn't be decompressed.");
+                    throw new PdfError("This PDF is damaged or too large to read.");
                 }
+                $this->inflated += strlen($out);
                 $raw = $out;
             } elseif ($f === '/DCTDecode' || $f === '/JPXDecode') {
                 return '';  // images: no text in them
@@ -330,6 +348,9 @@ final class Pdf
         $joinNext = false;
         while (!$lx->done()) {
             $t = $lx->value();  // operands can be arrays (TJ) and dictionaries (marked content)
+            if (++$this->ops > self::MAX_OPS) {
+                throw new PdfError('This PDF is too complex to read.');
+            }
             if (!$t instanceof PdfOp) {
                 if ($t !== null) {
                     $stack[] = $t;
@@ -341,13 +362,13 @@ final class Pdf
             switch ($t->op) {
                 case 'q': $gs[] = $ctm; break;
                 case 'Q': $ctm = array_pop($gs) ?? $ctm; break;
-                case 'cm': if (count($a) === 6) { $ctm = self::mul(array_map('floatval', $a), $ctm); } break;
+                case 'cm': if (self::matrix($a)) { $ctm = self::mul(self::matrix($a), $ctm); } break;
                 case 'BT': $tm = $lm = [1, 0, 0, 1, 0, 0]; $joinNext = false; break;
-                case 'Tf': $font = $this->font($res, $a[0] ?? ''); $size = (float)($a[1] ?? 0); break;
-                case 'TL': $leading = (float)($a[0] ?? 0); break;
-                case 'Tm': if (count($a) === 6) { $tm = $lm = array_map('floatval', $a); } $joinNext = false; break;
-                case 'TD': $leading = -(float)($a[1] ?? 0); // fall through: TD is TL + Td
-                case 'Td': $lm = self::mul([1, 0, 0, 1, (float)($a[0] ?? 0), (float)($a[1] ?? 0)], $lm); $tm = $lm; $joinNext = false; break;
+                case 'Tf': $font = $this->font($res, is_string($a[0] ?? null) ? $a[0] : ''); $size = self::num($a[1] ?? 0); break;
+                case 'TL': $leading = self::num($a[0] ?? 0); break;
+                case 'Tm': if (self::matrix($a)) { $tm = $lm = self::matrix($a); } $joinNext = false; break;
+                case 'TD': $leading = -self::num($a[1] ?? 0); // fall through: TD is TL + Td
+                case 'Td': $lm = self::mul([1, 0, 0, 1, self::num($a[0] ?? 0), self::num($a[1] ?? 0)], $lm); $tm = $lm; $joinNext = false; break;
                 case 'T*': $lm = self::mul([1, 0, 0, 1, 0, -$leading], $lm); $tm = $lm; $joinNext = false; break;
                 case "'": case '"':
                     $lm = self::mul([1, 0, 0, 1, 0, -$leading], $lm); $tm = $lm; $joinNext = false;
@@ -369,6 +390,8 @@ final class Pdf
                     $fs = $size * sqrt($m[0] * $m[0] + $m[1] * $m[1]);
                     if ($joinNext && $items) {
                         $items[count($items) - 1][3] .= $text;  // shown right after the previous piece
+                    } elseif (count($items) >= self::MAX_TEXT) {
+                        throw new PdfError('This PDF is too complex to read.');
                     } else {
                         $items[] = [$m[4], $m[5], $fs, $text];
                     }
@@ -378,14 +401,29 @@ final class Pdf
                     $ref = $this->resolve($res['XObject'] ?? [])[ltrim((string)($a[0] ?? ''), '/')] ?? null;
                     $xo = $this->resolve($ref);
                     if (is_array($xo) && ($xo['dict']['Subtype'] ?? '') === '/Form' && $depth < 4 && $ref instanceof PdfRef) {
-                        $mx = $this->resolve($xo['dict']['Matrix'] ?? [1, 0, 0, 1, 0, 0]);
+                        if (++$this->forms > self::MAX_FORMS) {
+                            throw new PdfError('This PDF is too complex to read.');
+                        }
+                        $mx = self::matrix((array)$this->resolve($xo['dict']['Matrix'] ?? [])) ?: [1, 0, 0, 1, 0, 0];
                         $xres = $this->resolve($xo['dict']['Resources'] ?? null);
                         $this->runContent($this->streamData($xo, $ref->num), is_array($xres) ? $xres : $res,
-                            self::mul(array_map('floatval', (array)$mx), $ctm), $items, $depth + 1);
+                            self::mul($mx, $ctm), $items, $depth + 1);
                     }
                     break;
             }
         }
+    }
+
+    private static function num(mixed $v): float
+    {
+        return is_int($v) || is_float($v) ? (float)$v : 0.0;
+    }
+
+    /** Six numbers (a transformation matrix), or null when the operands aren't that. */
+    private static function matrix(array $a): ?array
+    {
+        $a = array_values($a);
+        return count($a) === 6 && count(array_filter($a, fn($v) => is_int($v) || is_float($v))) === 6 ? array_map('floatval', $a) : null;
     }
 
     private static function mul(array $a, array $b): array
@@ -434,7 +472,7 @@ final class Pdf
         $map = [];
         $bytes = 1;
         if (preg_match('/begincodespacerange\s*<([0-9A-Fa-f]+)>/', $s, $m)) {
-            $bytes = max(1, intdiv(strlen($m[1]), 2));
+            $bytes = max(1, min(2, intdiv(strlen($m[1]), 2)));  // bank statements use 1- or 2-byte codes
         }
         $utf = fn(string $hex) => mb_convert_encoding(hex2bin(strlen($hex) % 4 ? str_pad($hex, 4, '0', STR_PAD_LEFT) : $hex), 'UTF-8', 'UTF-16BE');
         if (preg_match_all('/beginbfchar(.*?)endbfchar/s', $s, $blocks)) {
@@ -450,8 +488,11 @@ final class Pdf
                 preg_match_all('/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(<[0-9A-Fa-f]*>|\[[^\]]*\])/', $b, $m, PREG_SET_ORDER);
                 foreach ($m as $x) {
                     [$lo, $hi, $w] = [hexdec($x[1]), hexdec($x[2]), strlen($x[1])];
-                    if ($hi - $lo > 65535) {
+                    if ($hi < $lo || $hi - $lo > 65535 || $w > 4) {
                         continue;
+                    }
+                    if (count($map) + $hi - $lo > self::MAX_CMAP) {
+                        throw new PdfError('This PDF is too complex to read.');
                     }
                     $targets = $x[3][0] === '[' ? (preg_match_all('/<([0-9A-Fa-f]*)>/', $x[3], $t) ? $t[1] : []) : null;
                     $base = $targets === null ? hexdec(substr($x[3], 1, -1)) : 0;
@@ -539,14 +580,17 @@ final class PdfLexer
         return $this->stream;
     }
 
-    public function value(): mixed
+    public function value(int $depth = 0): mixed
     {
+        if ($depth > 64) {  // real PDFs nest a few levels; deep nesting is broken or hostile
+            throw new PdfError('This PDF is damaged or too complex to read.');
+        }
         $t = $this->token();
         if ($t === '<<') {
             $d = [];
             while (($k = $this->token()) !== '>>' && $k !== null) {
                 if (is_string($k) && str_starts_with($k, '/')) {
-                    $d[substr($k, 1)] = $this->value();
+                    $d[substr($k, 1)] = $this->value($depth + 1);
                 }
             }
             if (preg_match('/\G\s*stream\r?\n/', $this->s, $m, 0, $this->i)) {
@@ -556,7 +600,7 @@ final class PdfLexer
         }
         if ($t === '[') {
             $a = [];
-            while (($v = $this->value()) !== ']' && $this->i < $this->len) {
+            while (($v = $this->value($depth + 1)) !== ']' && $this->i < $this->len) {
                 $a[] = $v;
             }
             return $a;

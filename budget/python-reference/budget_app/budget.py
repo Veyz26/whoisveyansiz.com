@@ -253,6 +253,7 @@ def set_paid(conn: sqlite3.Connection, household_id: int, line_id: int, month: s
         conn.execute("INSERT INTO line_status (line_id, month, paid) VALUES (?, ?, ?) "
                      "ON CONFLICT (line_id, month) DO UPDATE SET paid = excluded.paid",
                      (line_id, month, int(bool(paid))))
+        conn.execute("UPDATE budget_lines SET source = NULL WHERE id = ?", (line_id,))  # ticked: theirs now
 
 
 def active_lines(conn: sqlite3.Connection, household_id: int, month: str) -> list[dict]:

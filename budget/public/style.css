@@ -191,6 +191,15 @@ label.field { display: grid; gap: 6px; font-size: 13px; color: var(--text-2); fo
 .up-status .ask { margin-bottom: 8px; color: var(--text); }
 .up-status .ask .muted { display: block; }
 .up-done { margin-top: 16px; }
+
+/* Actuals from statements on Overview, and the redraft row on Budget. */
+.actuals { margin-bottom: 18px; }
+.actuals .card-head a { color: var(--accent); }
+.actuals-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 10px; }
+.actuals-row span { display: block; font-size: 12.5px; color: var(--muted); }
+.actuals-row b { font-family: var(--serif); font-weight: 500; font-size: 22px; }
+@media (max-width: 560px) { .actuals-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.draft-row { justify-content: space-between; margin: -6px 0 16px; }
 @media (hover: none) { .drop-hint { display: none; } }  /* phones can't drag files in */
 
 /* Sign-in card (private mode): one short step at a time. */
