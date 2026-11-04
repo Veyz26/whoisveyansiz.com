@@ -1202,12 +1202,14 @@ function openUpload() {
 const uploaderHtml = () => `
   <p class="muted small up-intro">Any month, as many files as you like: FNB PDFs as the bank sends them, or CSV exports from FNB or Capitec.
     ${esc(APP)} works out the bank, account, months and whose account it is.</p>
-  <label class="drop" id="drop">
-    <input type="file" id="up-files" class="sr" multiple>
-    <span class="drop-ic">${icon("upload")}</span>
+  <div class="drop" id="drop">
+    <span class="drop-ic" aria-hidden="true">${icon("upload")}</span>
     <strong>Choose statements</strong>
     <span class="muted small drop-hint">or drop them here</span>
-  </label>
+    <!-- The real file input covers the whole box: iPhone Safari doesn't reliably open the picker from a
+         tap on a label for a hidden input, but a tap on the input itself always works. -->
+    <input type="file" id="up-files" multiple aria-label="Choose statements">
+  </div>
   <ul class="up-list" id="up-list" aria-live="polite"></ul>
   <div class="up-done hidden" id="up-done"><button type="button" class="btn primary" id="up-view">See transactions</button></div>`;
 
@@ -1234,7 +1236,9 @@ function uploader(box) {
       queue = queue.then(() => send(item));
     }
   };
-  input.addEventListener("change", () => { add([...input.files]); input.value = ""; });
+  const picked = () => { if (input.files.length) { add([...input.files]); input.value = ""; } };
+  input.addEventListener("change", picked);
+  input.addEventListener("input", picked);  // some iOS versions fire only one of the two
   drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
   drop.addEventListener("dragleave", () => drop.classList.remove("over"));
   drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); add([...e.dataTransfer.files]); });
