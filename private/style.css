@@ -178,6 +178,8 @@ label.field { display: grid; gap: 6px; font-size: 13px; color: var(--text-2); fo
 .drop { position: relative; display: grid; justify-items: center; gap: 4px; padding: 26px 16px; text-align: center; cursor: pointer;
   border: 1.5px dashed var(--border-strong); border-radius: 16px; background: var(--surface-2); transition: border-color .2s, background .2s; }
 .drop:hover, .drop.over, .drop:focus-within { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface-2)); }
+.drop input[type=file] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font-size: 0; }
+.drop:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .drop-ic { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; background: var(--ink); color: var(--ink-text); margin-bottom: 6px; }
 .drop-ic svg { width: 20px; height: 20px; }
 .up-list { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 8px; }
