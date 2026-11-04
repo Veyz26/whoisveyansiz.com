@@ -5,7 +5,7 @@ in with **Face ID or Touch ID** (passkeys). Only email addresses on an allowlist
 Python version, so it runs on the existing Hostinger shared plan with no extra hosting.
 
 Features: per-person and combined monthly budgets, debit-order change history, a next-month forecast
-with insights, goals with suggested cuts, FNB/Capitec statement import, a debt planner, Excel
+with insights, goals with suggested cuts, FNB/Capitec statement import (CSV, and FNB's PDF statements), a debt planner, Excel
 workbook import, a Power BI export and live feed, and POPIA tools (export, delete, retention, activity log).
 
 ## Folder layout
@@ -101,6 +101,10 @@ Microsoft sign-in is optional and off unless you add a `microsoft` block (see `d
 5. Tiara does the same on her phone, with her own setup code. The first person to sign up becomes the
    owner; the next one joins the same household automatically.
 6. In **Settings → Import Excel**, upload your budget workbook and map “Veyz” and “T” to the two people.
+7. In **Statements → Import**, upload bank statements and pick whose account each is. FNB's PDF statements work
+   as the bank emails them (their "restrictions only" protection is fine; a PDF that asks for a password to open
+   doesn't). A PDF is only imported if every row agrees with its running balance, closing balance and turnover
+   totals. Rows FNB prints without a description (accrued fees) are named "FNB bank fee".
 
 To check it worked:
 - `https://whoisveyansiz.com/private/api/health` must show `"ok": true` and `"schema": 4`.

@@ -9,6 +9,7 @@ declare(strict_types=1);
 use Linen\{Auth, AuthError, Billing, Budget, Config, Db, Export, Microsoft, NeedsRecoveryCode, Passkeys, PasskeyError, Privacy, Statements};
 
 require __DIR__ . '/FakeAuthenticator.php';
+require __DIR__ . '/FakePdf.php';
 
 require __DIR__ . '/../src/bootstrap.php';
 
@@ -304,6 +305,34 @@ Statements::import($db, $hid, $csv, $mv);
 Statements::import($db, $hid, "Date,Amount,Balance,Description\n2026/10/02,-50.00,1,B\n", $mt);
 check((int)$db->val('SELECT COUNT(*) FROM accounts WHERE household_id = ?', [$hid]) === 2, 'unlabelled statements from two people stay in separate accounts');
 throws(fn() => Statements::import($db, $hid, $csv, $mt, 'auto', 'FNB account (V)'), \InvalidArgumentException::class, "can't move one person's account to another", 'already');
+
+// --- FNB PDF statements -----------------------------------------------------------------------------
+// Dec to Jan (the year comes from the period), an overdrawn balance with no "Cr", a fee with no description,
+// a description that wraps onto a second line, and FNB's RC4 "restrictions only" protection.
+$rows = [['29 Dec', 'POS Purchase Woolworths 431835*1642 28 Dec', -45099], ['31 Dec', 'FNB App Payment To Rent', -900000],
+    ['31 Dec', '', -1100], ['02 Jan', 'Payshap Credit Salary', 2500000, 'Acme (Pty) Ltd Jan'], ['03 Jan', 'Magtape Debit Gym', -29900]];
+$pdf = FakePdf::build(FakePdf::fnbStatement('28 December 2026 to 27 January 2027', 600000, $rows), '');
+$st = Statements::parse($pdf);
+check(count($st['transactions']) === 5 && $st['account_last4'] === '1234', 'FNB PDF: every row and the account number are read');
+check(array_column($st['transactions'], 'posted_on') === ['2026-12-29', '2026-12-31', '2026-12-31', '2027-01-02', '2027-01-03'], 'FNB PDF: dates get the right year across New Year');
+check(array_column($st['transactions'], 'amount_cents') === [-45099, -900000, -1100, 2500000, -29900], 'FNB PDF: money in and out, overdraft included');
+check($st['transactions'][1]['balance_cents'] === -345099 && $st['transactions'][3]['balance_cents'] === 2153801, 'FNB PDF: an unmarked balance is overdrawn');
+check($st['transactions'][2]['description'] === 'FNB bank fee' && $st['transactions'][3]['description'] === 'Payshap Credit Salary Acme (Pty) Ltd Jan',
+    'FNB PDF: blank fee rows are named, wrapped descriptions are joined');
+throws(fn() => Statements::parse(FakePdf::build(FakePdf::fnbStatement('28 December 2026 to 27 January 2027', 600000, $rows, 1), '')),
+    \Linen\StatementFormatError::class, 'FNB PDF: a balance that does not add up stops the import', 'running balance');
+throws(fn() => Statements::parse(FakePdf::build(FakePdf::fnbStatement('28 December 2026 to 27 January 2027', 600000, $rows), 'secret')),
+    \Linen\StatementFormatError::class, 'FNB PDF: a password-protected PDF gets a clear message', 'needs a password');
+throws(fn() => Statements::parse(FakePdf::build([[[50, 700, 'Capitec Bank statement']]])), \Linen\StatementFormatError::class, 'a non-FNB PDF is refused', 'FNB');
+throws(fn() => Statements::parse(FakePdf::build(FakePdf::fnbStatement('1 May 2026 to 31 May 2026', 0, [['02 May', 'X', -100]])), 'capitec'),
+    \Linen\StatementFormatError::class, 'choosing Capitec for a PDF says to use CSV', 'CSV');
+check(count(Statements::parse(FakePdf::build(FakePdf::fnbStatement('1 May 2026 to 31 May 2026', 0, [['02 May', 'Unencrypted', 5000]])))['transactions']) === 1,
+    'FNB PDF without protection reads too');
+$db = fresh(['private_mode' => false]);
+$hid = $db->tx(fn($db) => Auth::create_household($db, 'T', ['V']));
+$r = Statements::import($db, $hid, $pdf, null, 'auto', null, 'transactional', 'jan.pdf');
+check($r['rows_added'] === 5 && Statements::import($db, $hid, $pdf)['rows_added'] === 0, 'FNB PDF imports once; importing it again adds nothing');
+check(!$db->val("SELECT 1 FROM transactions WHERE description LIKE '%431835%'"), 'FNB PDF: card numbers are masked');
 
 echo $failures ? "\n$failures of $count checks FAILED\n" : "All $count checks passed\n";
 exit($failures ? 1 : 0);
