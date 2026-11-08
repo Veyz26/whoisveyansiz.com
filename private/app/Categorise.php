@@ -129,6 +129,22 @@ final class Categorise
     }
 
     /** Manual override; with $makeRule, the merchant's other transactions follow too. */
+    /**
+     * A rule that recognises a payee from its key: the key's words in order with letters-only boundaries (so "FNB INSURE"
+     * matches "FNB Insure1234567") and anything between them ("APPLE COM BILL" matches "Apple.Com/Bill"). Mirrors categorise.payee_pattern.
+     */
+    public static function payee_pattern(string $merchant): string
+    {
+        return implode('.*?', array_map(fn($w) => '(?<![A-Z])' . preg_quote($w, '~') . '(?![A-Z])', preg_split('/\s+/', trim($merchant))));
+    }
+
+    /** Whether a payee key is specific enough for a rule ("V" or "FNB" would catch far too much). Mirrors categorise.specific_payee. */
+    public static function specific_payee(string $merchant): bool
+    {
+        $letters = strlen(preg_replace('/[^A-Z]/', '', mb_strtoupper($merchant)));
+        return $letters >= 5 || ($letters >= 4 && count(preg_split('/\s+/', trim($merchant))) >= 2);
+    }
+
     public static function set_category(Conn $db, int $householdId, int $txnId, string $category, bool $makeRule = true): array
     {
         if (!in_array($category, self::categories(), true)) {
@@ -142,21 +158,23 @@ final class Categorise
             $affected = 1;
             $db->exec("UPDATE transactions SET category = ?, category_source = 'user', is_transfer = ? WHERE id = ?",
                 [$category, (int)($category === 'Transfers'), $txnId]);
-            if ($makeRule && $txn['merchant'] !== '') {
+            $makeRule = $makeRule && self::specific_payee($txn['merchant']);
+            if ($makeRule) {
                 $dir = $txn['amount_cents'] > 0 ? 'in' : 'out';
+                $pattern = self::payee_pattern($txn['merchant']);
                 $db->exec("INSERT INTO rules (household_id, pattern, match, direction, category, priority, source)
-                           VALUES (?, ?, 'word', ?, ?, ?, 'user')
+                           VALUES (?, ?, 'regex', ?, ?, ?, 'user')
                            ON CONFLICT (household_id, pattern, match, direction)
                            DO UPDATE SET category = excluded.category, priority = excluded.priority, source = 'user'",
-                    [$householdId, $txn['merchant'], $dir, $category, self::USER_PRIORITY]);
-                $ruleId = (int)$db->val("SELECT id FROM rules WHERE household_id = ? AND pattern = ? AND match = 'word' AND direction = ?",
-                    [$householdId, $txn['merchant'], $dir]);
+                    [$householdId, $pattern, $dir, $category, self::USER_PRIORITY]);
+                $ruleId = (int)$db->val("SELECT id FROM rules WHERE household_id = ? AND pattern = ? AND match = 'regex' AND direction = ?",
+                    [$householdId, $pattern, $dir]);
                 $sign = $dir === 'in' ? '>' : '<';
                 $affected += $db->exec("UPDATE transactions SET category = ?, category_source = 'rule', rule_id = ?, is_transfer = ?
                     WHERE household_id = ? AND merchant = ? AND id != ? AND category_source != 'user' AND amount_cents $sign 0",
                     [$category, $ruleId, (int)($category === 'Transfers'), $householdId, $txn['merchant'], $txnId]);
             }
-            return ['updated' => $affected, 'rule_created' => $makeRule && $txn['merchant'] !== ''];
+            return ['updated' => $affected, 'rule_created' => $makeRule];
         });
     }
 }

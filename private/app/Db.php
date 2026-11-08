@@ -12,7 +12,7 @@ use PDO;
 
 final class Db
 {
-    public const SCHEMA_VERSION = 4;
+    public const SCHEMA_VERSION = 5;
 
     /** Schema changes after the first release, applied in order to existing databases. */
     public const MIGRATIONS = [
@@ -46,6 +46,16 @@ SQL,
         4 => <<<'SQL'
 ALTER TABLE budget_lines ADD COLUMN goal_id INTEGER REFERENCES goals(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS ix_txn_amount ON transactions (household_id, amount_cents, posted_on);
+SQL,
+        // Which dates each statement covers (so averages skip part-months), and budget items drafted from
+        // statements (so they can be redrafted without touching items people added themselves).
+        5 => <<<'SQL'
+ALTER TABLE imports ADD COLUMN period_from TEXT;
+ALTER TABLE imports ADD COLUMN period_to TEXT;
+UPDATE imports SET period_from = (SELECT MIN(posted_on) FROM transactions t WHERE t.import_id = imports.id),
+                   period_to = (SELECT MAX(posted_on) FROM transactions t WHERE t.import_id = imports.id);
+ALTER TABLE budget_lines ADD COLUMN source TEXT;
+ALTER TABLE budget_lines ADD COLUMN draft_key TEXT;
 SQL,
     ];
 
@@ -315,6 +325,7 @@ SQL;
                 foreach (self::MIGRATIONS as $mv => $sql) {
                     if ($v < $mv) {
                         $pdo->exec($sql);
+                        self::upgrade_data($db, $mv);
                         $v = $mv;
                     }
                 }
@@ -322,6 +333,69 @@ SQL;
             });
         }
         return $db;
+    }
+
+    /** Data changes that SQL alone can't make, run right after that version's SQL (same transaction). */
+    private static function upgrade_data(Conn $db, int $version): void
+    {
+        if ($version === 5) {
+            // Statements already imported get what new imports get: long numbers glued to letters masked, payee names
+            // without dates and references, and fingerprints by running balance (so re-uploading a statement is still
+            // recognised). OR IGNORE: should two old rows now look identical, the second keeps its old fingerprint.
+            // FNB fee rows were all "FNB bank fee": name them as new imports do (the biggest on a statement's last
+            // day is the monthly account fee, the others transaction fees).
+            $monthly = [];
+            foreach ($db->all("SELECT t.id, t.import_id, t.amount_cents FROM transactions t JOIN imports i ON i.id = t.import_id
+                               WHERE t.description = 'FNB bank fee' AND t.posted_on = i.period_to AND t.amount_cents < 0 ORDER BY t.amount_cents DESC") as $t) {
+                $monthly[$t['import_id']] = $t['id'];  // ordered so the biggest fee is last, and wins
+            }
+            $db->exec("UPDATE transactions SET description = CASE WHEN id IN (" . (Conn::placeholders($monthly) ?: 'NULL') . ")
+                       THEN 'FNB monthly account fee' ELSE 'FNB transaction fee' END WHERE description = 'FNB bank fee'", array_values($monthly));
+            $seen = [];
+            foreach ($db->all('SELECT id, account_id, posted_on, amount_cents, description, balance_cents FROM transactions ORDER BY id') as $t) {
+                $desc = Statements::sanitise($t['description']);
+                $base = $t['posted_on'] . '|' . $t['amount_cents'] . '|' . mb_strtoupper($desc);
+                $seen[$t['account_id'] . "|$base"] = ($seen[$t['account_id'] . "|$base"] ?? 0) + 1;
+                $fp = Statements::fingerprint((int)$t['account_id'], $base, $t['balance_cents'] === null ? null : (int)$t['balance_cents'],
+                    $seen[$t['account_id'] . "|$base"]);
+                $db->exec('UPDATE OR IGNORE transactions SET description = ?, merchant = ?, fingerprint = ? WHERE id = ?',
+                    [$desc, Statements::merchant_key($desc), $fp, $t['id']]);
+            }
+            // People's "remember for this payee" rules were the payee key as a word, which often didn't match the
+            // description it came from ("APPLE COM BILL" vs "Apple.Com/Bill"); make them payee patterns.
+            // The new key only when it's still specific: an old "PAYSHAP CREDIT V" rekeys to "V", which would catch
+            // every payment with a V in it, so that rule keeps all of its old words (no broader than before).
+            foreach ($db->all("SELECT id, pattern FROM rules WHERE source = 'user' AND match = 'word'") as $r) {
+                $key = Statements::merchant_key($r['pattern']);
+                $pattern = match (true) {
+                    mb_strtoupper($r['pattern']) === 'FNB BANK FEE' => 'FNB (?:MONTHLY ACCOUNT|TRANSACTION) FEE',  // fee rows' new names
+                    Categorise::specific_payee($key) => Categorise::payee_pattern($key),
+                    default => Categorise::payee_pattern(mb_strtoupper($r['pattern'])),
+                };
+                $db->exec("UPDATE OR IGNORE rules SET pattern = ?, match = 'regex' WHERE id = ?", [$pattern, $r['id']]);
+            }
+            // FNB-aware built-in rules (own-account transfers, card repayments, FNB policies), applied again, but never
+            // to what people chose: rows they set themselves, or rows one of their payee rules set.
+            $db->exec("UPDATE rules SET priority = 260 WHERE household_id = 0 AND source = 'builtin' AND category = 'Debt repayments'
+                       AND pattern IN ('CREDIT CARD', 'CC PAYMENT')");
+            $db->exec("DELETE FROM rules WHERE household_id = 0 AND source = 'builtin' AND category = 'Income' AND pattern = 'REFUND'");
+            Categorise::seed_builtin_rules($db);
+            foreach ($db->all('SELECT id FROM households') as $h) {
+                $ids = array_map('intval', array_column($db->all("SELECT t.id FROM transactions t LEFT JOIN rules r ON r.id = t.rule_id
+                    WHERE t.household_id = ? AND t.category_source != 'user' AND (r.id IS NULL OR r.source = 'builtin')", [$h['id']]), 'id'));
+                Categorise::apply_rules($db, (int)$h['id'], $ids);
+            }
+            // Older imports only know their first and last row: close gaps of up to a week between an account's
+            // consecutive statements, so back-to-back statements cover the days between them.
+            $prev = null;
+            foreach ($db->all('SELECT id, account_id, period_from, period_to FROM imports WHERE period_from IS NOT NULL ORDER BY account_id, period_from') as $i) {
+                if ($prev && $prev['account_id'] === $i['account_id'] && $i['period_from'] > $prev['period_to']
+                    && strtotime($i['period_from']) - strtotime($prev['period_to']) <= 8 * 86400) {
+                    $db->exec('UPDATE imports SET period_to = ? WHERE id = ?', [date('Y-m-d', strtotime($i['period_from'] . ' -1 day')), $prev['id']]);
+                }
+                $prev = $i['period_to'] >= ($prev['period_to'] ?? '') || $prev['account_id'] !== $i['account_id'] ? $i : $prev;
+            }
+        }
     }
 }
 
