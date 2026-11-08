@@ -194,8 +194,224 @@ final class Budget
             $params[] = $v;
         }
         if ($sets) {
+            $sets[] = 'source = NULL';  // an edited item drafted from statements is now theirs: a redraft keeps it
             $db->exec('UPDATE budget_lines SET ' . implode(', ', $sets) . ' WHERE id = ?', [...$params, $id]);
         }
+    }
+
+    // ------------------------------------------------------------------ drafting from statements (PHP only)
+    /**
+     * Drafts each person's budget from the statements of the accounts they own, so every page has numbers as soon
+     * as statements are in. Only months the statements cover in full are used (up to the last 6):
+     * - income: each payer whose money is categorised Income;
+     * - each regular payment (debit orders, subscriptions; Analysis::recurring) as its own item;
+     * - bank fees, interest and the rest of the spending, one item per category;
+     * - money moved to the household's own accounts (savings, investments, pockets), net of money back from them:
+     *   "Moved to your own accounts" when more went out, "Back from your own accounts" when more came back.
+     * Each of those months gets its actual amount, so the plan's left over is the change in the balance. From the
+     * month after, an item carries a typical amount:
+     * - spending categories and own-account moves: the average over the months;
+     * - regular payments: the latest month's amount (a debit order that went up stays up);
+     * - income: the payer's usual payment (an amount they paid in two different months), not a one-off top-up.
+     * Income and payments seen only once are one-offs: they keep their actual amount and stop. "Regular" is judged
+     * on every statement row, part-months included, so a debit order on the 31st that fell outside one statement
+     * still counts.
+     * Items are marked source = 'statements' and remember what they were drafted from (draft_key). Redrafting
+     * replaces only untouched drafted items; items people added, edited, ticked as paid or linked to a goal stay,
+     * and nothing they already cover is drafted again (the same draft_key or kind and name; a payer when they've
+     * added income of about the same amount; a category, or own-account moves, they've added an item for). A person whose
+     * budget was built by hand (no drafted items) is left alone. Joint accounts aren't drafted: nobody is the
+     * obvious owner.
+     * @return array{lines:int, months:list<string>, members:list<string>}
+     */
+    public static function draft_from_statements(Conn $db, int $hid, ?int $onlyMember = null): array
+    {
+        return $db->tx(function (Conn $db) use ($hid, $onlyMember) {
+            $out = ['lines' => 0, 'months' => [], 'members' => []];
+            foreach (self::members($db, $hid) as $mem) {
+                if ($onlyMember !== null && $mem['id'] !== $onlyMember) {
+                    continue;
+                }
+                $byHand = !$db->val('SELECT 1 FROM budget_lines WHERE household_id = ? AND member_id = ? AND draft_key IS NOT NULL', [$hid, $mem['id']])
+                    && $db->val('SELECT 1 FROM budget_lines WHERE household_id = ? AND member_id = ?', [$hid, $mem['id']]);
+                if ($byHand) {
+                    continue;
+                }
+                $s = new Scope($hid, $mem['id']);
+                $months = array_reverse(array_slice(Analysis::complete_months($db, $s), 0, 6));  // oldest first
+                if (!$months) {
+                    continue;  // no month covered in full yet: nothing to draft without guessing
+                }
+                $out['lines'] += self::draft_member($db, $hid, $mem['id'], $s, $months);
+                $out['members'][] = $mem['name'];
+                $out['months'] = array_values(array_unique([...$out['months'], ...$months]));
+            }
+            sort($out['months']);
+            return $out;
+        });
+    }
+
+    /** True while every budget item a person has is an untouched draft (or they have none): safe to redraft. */
+    public static function draft_untouched(Conn $db, int $hid, int $memberId): bool
+    {
+        return !$db->val("SELECT 1 FROM budget_lines WHERE household_id = ? AND member_id = ? AND (source IS NULL OR source != 'statements')",
+            [$hid, $memberId]);
+    }
+
+    private static function draft_member(Conn $db, int $hid, int $memberId, Scope $s, array $months): int
+    {
+        $db->exec("DELETE FROM budget_lines WHERE household_id = ? AND member_id = ? AND source = 'statements'", [$hid, $memberId]);
+        $theirs = [];  // what the items they keep already cover
+        $theirIncome = [];  // amounts of income items they added themselves
+        foreach ($db->all('SELECT id, kind, name, category, draft_key FROM budget_lines WHERE household_id = ? AND member_id = ?', [$hid, $memberId]) as $r) {
+            $theirs[$r['kind'] . '|' . mb_strtolower($r['name'])] = true;
+            if ($r['draft_key'] !== null) {
+                $theirs[$r['draft_key']] = true;
+            } elseif ($r['kind'] === 'income') {
+                $theirIncome[] = (int)self::amount_on($db, (int)$r['id'], end($months));
+            } elseif ($r['kind'] === 'saving') {
+                $theirs['moves'] = true;
+            } else {
+                $theirs['cat|' . $r['category']] = true;
+            }
+        }
+        $last = end($months);
+        $regular = [];
+        foreach (Analysis::recurring($db, $s, $last) as $r) {
+            if ($r['active']) {
+                $regular[$r['merchant']] = true;
+            }
+        }
+        [$w, $p] = $s->sql();
+        // Every row, part-months included: how often something happens is judged on all of them.
+        $rows = $db->all("SELECT t.posted_on, substr(t.posted_on, 1, 7) AS m, t.merchant, t.category, t.description, t.amount_cents, t.is_transfer
+            FROM transactions t WHERE $w ORDER BY t.posted_on", $p);
+        $inWindow = array_flip($months);
+        $items = [];
+        $moved = array_fill_keys($months, 0);
+        foreach ($rows as $t) {
+            $amt = (int)$t['amount_cents'];
+            $cat = $t['category'];
+            if ($t['is_transfer'] || $cat === 'Transfers' || $cat === 'Savings & investments') {
+                if (isset($inWindow[$t['m']])) {
+                    $moved[$t['m']] -= $amt;
+                }
+                continue;
+            }
+            if ($amt > 0 && $cat !== 'Income') {
+                [$key, $kind] = ["cat|$cat", 'expense'];  // money back lowers that category's spending
+            } elseif ($amt > 0) {
+                [$key, $kind] = ["in|{$t['merchant']}", 'income'];
+            } elseif (isset($regular[$t['merchant']]) && !in_array($cat, ['Bank fees', 'Interest charged'], true)) {
+                [$key, $kind] = ["reg|{$t['merchant']}", 'expense'];
+            } else {
+                [$key, $kind] = ["cat|$cat", 'expense'];
+            }
+            $items[$key] ??= ['kind' => $kind, 'category' => $kind === 'income' ? 'Income' : $cat, 'debit_order' => false,
+                'per' => array_fill_keys($months, 0), 'seen' => [], 'credits' => [],
+                'name' => str_starts_with($key, 'cat|') ? $cat : self::payee_name($t['merchant'])];
+            $it = &$items[$key];
+            $it['seen'][$t['m']] = true;
+            if ($kind === 'income') {
+                $it['credits'][] = [$t['m'], $amt];
+            }
+            if (isset($inWindow[$t['m']])) {
+                $it['per'][$t['m']] += $kind === 'income' ? $amt : -$amt;
+            }
+            if (str_starts_with($key, 'reg|') && preg_match('/DEBIT ORDER|DEBICHECK|MAGTAPE DEBIT|\bD\/O\b/i', $t['description'])) {
+                $it['debit_order'] = true;
+            }
+            unset($it);
+        }
+        $avg = fn(array $per) => Money::rnd(array_sum($per) / count($months));
+        // A category whose refunds beat its spending in a month: that excess is money back, planned as income.
+        $back = array_fill_keys($months, 0);
+        foreach ($items as $key => &$it) {
+            if (str_starts_with($key, 'cat|')) {
+                foreach ($it['per'] as $m => $v) {
+                    if ($v < 0) {
+                        [$back[$m], $it['per'][$m]] = [$back[$m] - $v, 0];
+                    }
+                }
+            }
+        }
+        unset($it);
+        $items['cat|refunds'] = ['kind' => 'income', 'category' => 'Income', 'debit_order' => false, 'name' => 'Money back (refunds)',
+            'per' => $back, 'seen' => [], 'credits' => []];
+        // Own-account moves, net, as two items so neither amount is ever negative.
+        $items['moves|out'] = ['kind' => 'saving', 'category' => 'Savings & investments', 'debit_order' => false, 'name' => 'Moved to your own accounts',
+            'per' => array_map(fn($v) => max(0, $v), $moved), 'seen' => [], 'credits' => []];
+        $items['moves|back'] = ['kind' => 'income', 'category' => 'Income', 'debit_order' => false, 'name' => 'Back from your own accounts',
+            'per' => array_map(fn($v) => max(0, -$v), $moved), 'seen' => [], 'credits' => []];
+
+        $made = 0;
+        ksort($items);
+        foreach ($items as $key => $it) {
+            $present = array_filter($it['per'], fn($v) => $v > 0);
+            // Income they added themselves covers a payer when it's about the same amount (their "Salary" is this
+            // payroll); a different amount (a bonus, a side gig) doesn't.
+            $usual = str_starts_with($key, 'in|') ? self::usual_amount($it, $months) : 0;
+            $covered = isset($theirs[$key]) || isset($theirs[$it['kind'] . '|' . mb_strtolower($it['name'])])
+                || ($usual > 0 && array_filter($theirIncome, fn($a) => abs($a - $usual) <= 0.1 * $usual))
+                || (str_starts_with($key, 'moves|') && isset($theirs['moves'])) || ($it['kind'] === 'expense' && isset($theirs['cat|' . $it['category']]));
+            if (!$present || $covered) {
+                continue;
+            }
+            if ($key === 'cat|refunds') {
+                [$typical, $start] = [0, array_key_first($present)];  // money back happened; it isn't planned on
+            } elseif (str_starts_with($key, 'cat|') || str_starts_with($key, 'moves|')) {
+                [$typical, $start] = [$avg($it['per']), $months[0]];
+            } else {
+                // Regular when seen in two different months (any rows, part-months too), or when there's only one month.
+                $typical = count($it['seen']) >= 2 || count($months) === 1 ? self::usual_amount($it, $months) : 0;
+                $start = array_key_first($present);
+            }
+            $id = self::create_line($db, $hid, ['member_id' => $memberId, 'kind' => $it['kind'], 'name' => $it['name'],
+                'category' => $it['category'], 'is_debit_order' => $it['debit_order'], 'amount_cents' => $it['per'][$start], 'start_month' => $start]);
+            foreach ($months as $m) {
+                if ($m > $start) {
+                    self::set_amount($db, $hid, $id, $m, $it['per'][$m]);
+                }
+            }
+            if ($typical === 0) {
+                $db->exec('UPDATE budget_lines SET end_month = ? WHERE id = ?', [array_key_last($present), $id]);  // a one-off
+            } elseif ($typical !== $it['per'][end($months)]) {
+                self::set_amount($db, $hid, $id, Money::add_months(end($months), 1), $typical);
+            }
+            $db->exec("UPDATE budget_lines SET source = 'statements', draft_key = ? WHERE id = ?", [$key, $id]);
+            $made++;
+        }
+        return $made;
+    }
+
+    /**
+     * What a regular item usually costs: the latest month it appeared in. For income, the payer's usual payment: the
+     * latest single amount they also paid (within 5%) in another month, so a one-off top-up isn't planned on.
+     */
+    private static function usual_amount(array $it, array $months): int
+    {
+        if ($it['kind'] === 'income') {
+            foreach (array_reverse($it['credits']) as [$m, $a]) {
+                foreach ($it['credits'] as [$m2, $a2]) {
+                    if ($m2 !== $m && abs($a2 - $a) <= 0.05 * $a) {
+                        return $a;
+                    }
+                }
+            }
+        }
+        foreach (array_reverse($months) as $m) {
+            if ($it['per'][$m] > 0) {
+                return $it['per'][$m];
+            }
+        }
+        return 0;
+    }
+
+    /** "ACME PAYROLL SERVICES" -> "Acme Payroll Services", keeping short codes such as FNB or MTN in capitals. */
+    private static function payee_name(string $merchant): string
+    {
+        return implode(' ', array_map(fn($w) => strlen($w) <= 3 && $w !== 'COM' ? $w : ucfirst(strtolower($w)),
+            explode(' ', $merchant))) ?: 'Payment';
     }
 
     public static function delete_line(Conn $db, int $hid, int $id): void
@@ -281,6 +497,7 @@ final class Budget
         self::valid_month($month);
         $db->exec('INSERT INTO line_status (line_id, month, paid) VALUES (?, ?, ?) ON CONFLICT (line_id, month) DO UPDATE SET paid = excluded.paid',
             [$lineId, $month, (int)$paid]);
+        $db->exec('UPDATE budget_lines SET source = NULL WHERE id = ?', [$lineId]);  // ticked: theirs now, a redraft keeps it
     }
 
     public static function active_lines(Conn $db, int $hid, string $month): array

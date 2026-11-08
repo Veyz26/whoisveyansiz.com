@@ -548,10 +548,18 @@ final class Api
             return ['ok' => true];
         }, write: true);
 
+        // (Re)draft the budget from statements: replaces items drafted before, keeps everything people added or edited.
+        $R('POST', '/api/budget/draft', function (Ctx $c) {
+            $r = Budget::draft_from_statements($c->db, $c->hid(), $c->int('member_id', false));
+            $c->db->audit($c->hid(), $c->uid(), 'budget.drafted', "{$r['lines']} items from statements");
+            return $r;
+        }, write: true);
+
         $R('POST', '/api/budget/lines/(\d+)/amount', function (Ctx $c, string $id) {
             self::lineFields($c); // type-checks month / mode / note
             $r = Budget::set_amount($c->db, $c->hid(), (int)$id, (string)($c->body['month'] ?? $c->month()), $c->int('amount_cents'),
                 (string)($c->body['mode'] ?? 'onward'), $c->body['note'] ?? null);
+            $c->db->exec('UPDATE budget_lines SET source = NULL WHERE id = ? AND household_id = ?', [(int)$id, $c->hid()]);  // now theirs
             $c->db->audit($c->hid(), $c->uid(), 'budget.amount_changed', "line $id from {$r['month']} ({$r['mode']})");
             return $r;
         }, write: true);
@@ -628,6 +636,13 @@ final class Api
                 }
             }
             $r = Statements::import_parsed($c->db, $c->hid(), $st, $memberId, $label, 'transactional', $filename);
+            // Every page reads the budget, so it's drafted from statements for someone with no budget yet, and redrafted
+            // with each new statement while all of it is still an untouched draft (several files at once included).
+            $r['drafted'] = 0;
+            if ($memberId !== null && $r['rows_added'] > 0 && Budget::draft_untouched($c->db, $c->hid(), $memberId)) {
+                $r['drafted'] = Budget::draft_from_statements($c->db, $c->hid(), $memberId)['lines'];
+                $c->db->audit($c->hid(), $c->uid(), 'budget.drafted', "{$r['drafted']} items from statements");
+            }
             $c->db->audit($c->hid(), $c->uid(), 'statement.imported', "{$r['rows_added']} new rows");
             return $r;
         }, write: true);
@@ -641,8 +656,14 @@ final class Api
                 return ['has_data' => false];
             }
             $m = Budget::valid_month($m);
+            // Whose statements the figures come from, and who has none yet, so a household total isn't mistaken for complete.
+            $accounts = $c->db->all('SELECT a.label FROM accounts a WHERE a.household_id = ?' . ($c->member() !== null ? ' AND a.member_id = ?' : '')
+                . ' AND EXISTS (SELECT 1 FROM transactions t WHERE t.account_id = a.id) ORDER BY a.label', array_filter([$c->hid(), $c->member()], fn($v) => $v !== null));
+            $missing = $c->member() !== null ? [] : array_column($c->db->all('SELECT m.name FROM members m WHERE m.household_id = ?
+                AND NOT EXISTS (SELECT 1 FROM accounts a WHERE a.member_id = m.id) ORDER BY m.sort, m.id', [$c->hid()]), 'name');
             return ['has_data' => true, 'summary' => Analysis::summary($c->db, $s, $m), 'fees' => Analysis::fees_and_interest($c->db, $s, $m),
-                'recurring' => Analysis::recurring($c->db, $s, $m), 'advice' => Analysis::top_actions($c->db, $s, $m)];
+                'recurring' => Analysis::recurring($c->db, $s, $m), 'advice' => Analysis::top_actions($c->db, $s, $m),
+                'accounts' => array_column($accounts, 'label'), 'missing' => $missing];
         });
 
         // --- debts ---------------------------------------------------------------------
@@ -691,7 +712,14 @@ final class Api
                 }
             }
             try {
-                return Xlsx::import($c->db, $c->hid(), $xl($c), $map, $c->uid(), ($c->body['from_month'] ?? null) ?: null);
+                // The workbook is their budget: it replaces untouched items drafted from statements, which would
+                // otherwise count the same income and spending twice.
+                return $c->db->tx(function (Conn $db) use ($c, $xl, $map) {
+                    foreach (array_unique(array_values($map)) as $mid) {
+                        $db->exec("DELETE FROM budget_lines WHERE household_id = ? AND member_id = ? AND source = 'statements'", [$c->hid(), $mid]);
+                    }
+                    return Xlsx::import($db, $c->hid(), $xl($c), $map, $c->uid(), ($c->body['from_month'] ?? null) ?: null);
+                });
             } catch (WorkbookError $e) {
                 throw new ApiError(422, $e->getMessage());
             }

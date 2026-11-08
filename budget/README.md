@@ -101,13 +101,29 @@ Microsoft sign-in is optional and off unless you add a `microsoft` block (see `d
 5. Tiara does the same on her phone, with her own setup code. The first person to sign up becomes the
    owner; the next one joins the same household automatically.
 6. In **Settings → Import Excel**, upload your budget workbook and map “Veyz” and “T” to the two people.
-7. In **Statements → Import**, upload bank statements and pick whose account each is. FNB's PDF statements work
-   as the bank emails them (their "restrictions only" protection is fine; a PDF that asks for a password to open
-   doesn't). A PDF is only imported if every row agrees with its running balance, closing balance and turnover
-   totals. Rows FNB prints without a description (accrued fees) are named "FNB bank fee".
+7. Tap **Upload** (top right on every page) and add statements: any month, any number, FNB PDFs as the bank
+   emails them or FNB/Capitec CSV exports. The app works out the bank, account and months; a new account asks
+   whose it is once. A PDF is only imported if every row agrees with its running balance, closing balance and
+   turnover totals. FNB prints its fees without a description: the biggest one on the statement's last day is named
+   "FNB monthly account fee", the others "FNB transaction fee".
+
+### How statements feed the rest of the app
+- **Budget drafted from statements.** When someone's first statements arrive and they have no budget yet, their
+  budget is drafted from the months the statements cover in full: income by payer, each regular payment and debit
+  order, bank fees, everyday spending by category, and savings. Those months get the actual amounts; later months a
+  typical amount. **Redraft from statements** (Budget page) replaces only untouched drafted items. A budget built
+  by hand is never drafted over.
+- **Overview** shows "From your statements" (what came in, was spent, saved and left) next to the plan.
+- **Complete months only for averages.** Each upload records the dates it covers. Fee averages, "vs previous
+  months" and other averages only use months the statements cover in full, so a statement that starts on the 28th
+  doesn't count as a month with almost no fees.
+- **FNB wording.** "FNB App Transfer" is a move between your own accounts (a transfer, not income or spending),
+  "Payment To Investment ..." goes to your own investment account (savings), and card repayments are debt
+  repayments even when the reference says "Food". Payee names drop FNB's card-purchase dates and references, so
+  the same payee is recognised month to month.
 
 To check it worked:
-- `https://whoisveyansiz.com/private/api/health` must show `"ok": true` and `"schema": 4`.
+- `https://whoisveyansiz.com/private/api/health` must show `"ok": true` and `"schema": 5`.
 - `https://whoisveyansiz.com/private/app/Auth.php` must return **403**.
 - `https://whoisveyansiz.com/private/api/me` must return **401** when you're signed out.
 - `https://www.whoisveyansiz.com/private/` must redirect to `https://whoisveyansiz.com/private/`

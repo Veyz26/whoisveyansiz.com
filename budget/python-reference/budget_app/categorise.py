@@ -43,8 +43,10 @@ BUILTIN_RULES: list[tuple[str, int, str, list[str]]] = [
     ]),
     ("Income", 290, "in", [
         "SALARY", "SAL", "PAYROLL", "WAGES", "INTEREST", "CREDIT INTEREST", "EBUCKS", "CASHBACK",
-        "REWARDS", "REFUND", "SASSA",
+        "REWARDS", "SASSA",
     ]),
+    # Money back for something bought: it lowers spending instead of counting as income.
+    ("Other", 290, "in", ["REFUND", "REVERSAL", "REVERSED"]),
     ("Eating out", 250, "out", [
         "UBER EATS", "UBEREATS", "MR D", "MRD", "KFC", "MCDONALDS", "MCDONALD'S", "MCD", "NANDOS",
         "NANDO'S", "STEERS", "WIMPY", "SPUR", "DEBONAIRS", "ROMANS PIZZA", "STARBUCKS", "VIDA E CAFFE",
@@ -66,13 +68,14 @@ BUILTIN_RULES: list[tuple[str, int, str, list[str]]] = [
         "COOL IDEAS", "AIRTIME", "DATA BUNDLE", "PREPAID AIRTIME", "PREPAID DATA", "FIBRE", "FIBER", "CELLPHONE",
     ]),
     ("Subscriptions", 200, "out", [
-        "NETFLIX", "SHOWMAX", "SPOTIFY", "DSTV", "MULTICHOICE", "YOUTUBE", "APPLE.COM", "APPLE COM BILL",
+        "NETFLIX", "SHOWMAX", "SPOTIFY", "DSTV", "MULTICHOICE", "YOUTUBE", "regex:YOUTUBE ?PREM", "LINKEDIN",
+        "APPLE.COM", "APPLE COM BILL",
         "ICLOUD", "DISNEY", "PRIME VIDEO", "PRIMEVIDEO", "AMAZON PRIME", "MICROSOFT", "ADOBE", "OPENAI",
         "CHATGPT", "ANTHROPIC", "CLAUDE.AI", "GOOGLE ONE", "AUDIBLE", "DEEZER", "BOX OFFICE", "SUBS",
         "SUBSCRIPTIONS", "STREAMING",
     ]),
     ("Fitness & leisure", 200, "out", [
-        "VIRGIN ACTIVE", "PLANET FITNESS", "GYM", "WORLD OF GOLF", "GOLF", "PARKRUN",
+        "VIRGIN ACTIVE", "regex:VIRGIN ACT", "PLANET FITNESS", "GYM", "WORLD OF GOLF", "GOLF", "PARKRUN",
     ]),
     ("Housing & utilities", 200, "out", [
         "ESKOM", "PREPAID ELEC", "PREPAID ELECTRICITY", "ELECTRICITY", "CITY OF", "MUNICIPALITY",
@@ -82,6 +85,8 @@ BUILTIN_RULES: list[tuple[str, int, str, list[str]]] = [
     ("Insurance", 200, "out", [
         "MOMENTUM", "OLD MUTUAL", "SANLAM", "OUTSURANCE", "SANTAM", "HOLLARD", "MIWAY", "KING PRICE",
         "BUDGET INSURANCE", "1LIFE", "CLIENTELE", "INSURANCE", "ASSURANCE", "FUNERAL", "LIFE COVER",
+        # FNB's own policies, often run together with a policy number ("Fnbfuneral Ab1234...").
+        "regex:FNB ?LIFE", "regex:FNB ?FUNERAL", "regex:FNB ?INSURE",
     ]),
     ("Medical & health", 210, "out", [
         "DISCOVERY HEALTH", "MEDICAL AID", "BONITAS", "GEMS", "MEDSHIELD", "DIS-CHEM", "DISCHEM",
@@ -101,8 +106,16 @@ BUILTIN_RULES: list[tuple[str, int, str, list[str]]] = [
         "STER KINEKOR", "NU METRO", "COMPUTICKET", "QUICKET", "STEAM", "PLAYSTATION", "XBOX",
         "BETWAY", "HOLLYWOODBETS", "SUPABETS", "LOTTO", "ITHUBA",
     ]),
+    # FNB words its own-account moves as "Transfer" (payments to others are "Payment To"), and "Payment To
+    # Investment ..." goes to the account holder's own FNB investment account: both are moves between their own
+    # accounts, in either direction (money comes back from them too). These beat keyword rules such as
+    # SAL (Income) or FUEL, which would otherwise read "Transfer From Savings Sal" as salary.
+    ("Transfers", 295, "any", ["FNB APP TRANSFER"]),
+    ("Transfers", 295, "out", ["PAYMENT TO INVESTMENT"]),
+    # A card repayment, even when its reference says what the card was used for ("... Credit Card Groceries").
+    ("Debt repayments", 260, "out", ["CREDIT CARD", "CRED CARD", "CC PAYMENT"]),
     ("Debt repayments", 180, "out", [
-        "VEHICLE FINANCE", "WESBANK", "MFC", "CREDIT CARD", "CC PAYMENT", "PERSONAL LOAN",
+        "VEHICLE FINANCE", "WESBANK", "MFC", "PERSONAL LOAN",
         "STUDENT LOAN", "LOAN", "RCS", "TFG", "DIRECTAXIS", "ABSA VAF", "BUDGET FACILITY", "PAYJUSTNOW",
         "PAYFLEX",
     ]),
@@ -219,6 +232,18 @@ def apply_rules(conn: sqlite3.Connection, household_id: int, ids: list[int] | No
     return changed
 
 
+def payee_pattern(merchant: str) -> str:
+    """A rule that recognises a payee from its key: the key's words in order, letters-only boundaries (so
+    "FNB INSURE" matches "FNB Insure1234567"), anything between them ("APPLE COM BILL" matches "Apple.Com/Bill")."""
+    return ".*?".join(rf"(?<![A-Z]){re.escape(w)}(?![A-Z])" for w in merchant.split())
+
+
+def specific_payee(merchant: str) -> bool:
+    """Whether a payee key is specific enough for a rule ("V" or "FNB" would catch far too much)."""
+    letters = len(re.sub(r"[^A-Z]", "", merchant.upper()))
+    return letters >= 5 or (letters >= 4 and len(merchant.split()) >= 2)
+
+
 def set_category(conn: sqlite3.Connection, household_id: int, txn_id: int, category: str,
                  make_rule: bool = True) -> dict:
     """Manual override. With make_rule, existing and future transactions from the same
@@ -235,15 +260,16 @@ def set_category(conn: sqlite3.Connection, household_id: int, txn_id: int, categ
             "UPDATE transactions SET category = ?, category_source = 'user', is_transfer = ? WHERE id = ?",
             (category, int(category == "Transfers"), txn_id),
         )
-        if make_rule and txn["merchant"]:
+        make_rule = make_rule and specific_payee(txn["merchant"])
+        if make_rule:
             direction = "in" if txn["amount_cents"] > 0 else "out"
             cur = conn.execute(
                 """INSERT INTO rules (household_id, pattern, match, direction, category, priority, source)
-                   VALUES (?, ?, 'word', ?, ?, ?, 'user')
+                   VALUES (?, ?, 'regex', ?, ?, ?, 'user')
                    ON CONFLICT (household_id, pattern, match, direction)
                    DO UPDATE SET category = excluded.category, priority = excluded.priority, source = 'user'
                    RETURNING id""",
-                (household_id, txn["merchant"], direction, category, USER_PRIORITY),
+                (household_id, payee_pattern(txn["merchant"]), direction, category, USER_PRIORITY),
             )
             rule_id = cur.fetchone()["id"]
             sign = ">" if direction == "in" else "<"
@@ -255,7 +281,7 @@ def set_category(conn: sqlite3.Connection, household_id: int, txn_id: int, categ
                 (category, rule_id, int(category == "Transfers"), household_id, txn["merchant"], txn_id),
             )
             affected += cur.rowcount
-    return {"updated": affected, "rule_created": bool(make_rule and txn["merchant"])}
+    return {"updated": affected, "rule_created": bool(make_rule)}
 
 
 def unknown_merchants(conn: sqlite3.Connection, household_id: int, limit: int = 80) -> list[dict]:
