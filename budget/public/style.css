@@ -250,7 +250,7 @@ label.field { display: grid; gap: 6px; font-size: 13px; color: var(--text-2); fo
 .shell { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh; }
 .side {
   position: sticky; top: 0; height: 100vh; padding: 22px 16px; display: flex; flex-direction: column; gap: 22px;
-  background: var(--surface-2); border-right: 1px solid var(--border);
+  background: var(--surface-2); border-right: 1px solid var(--border); z-index: 20;
 }
 .side nav { display: grid; gap: 2px; }
 .side nav a {
@@ -260,8 +260,6 @@ label.field { display: grid; gap: 6px; font-size: 13px; color: var(--text-2); fo
 .side nav a svg { width: 18px; height: 18px; flex: none; opacity: .85; }
 .side nav a:hover { background: var(--bg-2); color: var(--text); }
 .side nav a.on { background: var(--surface); color: var(--text); box-shadow: var(--shadow); font-weight: 500; }
-.side .who { margin-top: auto; padding: 12px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); font-size: 13px; }
-.side .who strong { display: block; font-size: 14px; }
 .main { min-width: 0; }
 .topbar {
   position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
@@ -395,8 +393,11 @@ table.t { width: 100%; border-collapse: collapse; font-size: 14px; }
 @keyframes slide { from { transform: translateX(30px); opacity: 0; } }
 .toast {
   position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); z-index: 120; background: var(--ink); color: var(--ink-text);
-  padding: 11px 18px; border-radius: 999px; font-size: 14px; box-shadow: var(--shadow-lg); animation: rise .3s var(--ease) both;
+  display: flex; align-items: center; gap: 10px; width: max-content; max-width: min(460px, calc(100vw - 32px));
+  padding: 10px 18px 10px 12px; border-radius: 22px; font-size: 14px; line-height: 1.4; box-shadow: var(--shadow-lg); animation: rise .3s var(--ease) both;
 }
+.toast svg { flex: none; width: 22px; height: 22px; padding: 4px; border-radius: 50%; color: #fff; background: #4f8a5d; stroke-width: 2.4; }
+.toast.err svg { background: #c2603a; }
 @keyframes rise { from { opacity: 0; transform: translate(-50%, 10px); } }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 18px; overflow-x: auto; }
 .tabs button { border: 0; background: none; padding: 10px 14px; cursor: pointer; color: var(--text-2); border-bottom: 2px solid transparent; white-space: nowrap; }
@@ -572,3 +573,93 @@ input[type=file] { width: 100%; }
 .fx-backdrop + .pub-nav, .public .auth { position: relative; }
 .public:has(.fx-backdrop) .auth { background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
 @media (prefers-reduced-motion: reduce) { .fx-backdrop { transition: none; } }
+
+/* ---------- product polish: account menu, confirm dialog, loading, skeletons ---------- */
+::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+.avatar { flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: var(--ink); color: var(--ink-text); font-weight: 600; font-size: 13px; }
+.avatar.lg { width: 42px; height: 42px; font-size: 17px; }
+.auth .step > .avatar { justify-self: start; width: 52px; height: 52px; font-size: 21px; margin-bottom: 16px; }
+.auth .step > .btn.xl + form { margin-top: 10px; }
+
+.acct { margin-top: auto; position: relative; }
+.acct-btn {
+  width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 14px; background: var(--surface);
+  border: 1px solid var(--border); cursor: pointer; text-align: left; font-size: 12.5px; transition: border-color .2s, box-shadow .2s var(--ease);
+}
+.acct-btn:hover, .acct-btn[aria-expanded=true] { border-color: var(--border-strong); box-shadow: var(--shadow); }
+.acct-text { min-width: 0; flex: 1; display: grid; }
+.acct-text strong, .acct-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-text strong { font-size: 14px; font-weight: 600; }
+.acct-caret { flex: none; width: 7px; height: 7px; margin: 0 4px 0 2px; border: solid var(--muted); border-width: 1.5px 1.5px 0 0; transform: translateY(2px) rotate(-45deg); transition: transform .2s var(--ease); }
+.acct-btn[aria-expanded=true] .acct-caret { transform: translateY(-2px) rotate(135deg); }
+
+.menu {
+  position: absolute; left: 0; bottom: calc(100% + 8px); width: 288px; z-index: 40; display: grid; gap: 2px; padding: 8px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-lg);
+  transform-origin: bottom left; animation: menu-in .18s var(--ease) both;
+}
+@keyframes menu-in { from { opacity: 0; transform: translateY(6px) scale(.98); } }
+.menu-head { display: flex; align-items: center; gap: 12px; padding: 8px 8px 12px; }
+.menu-head > div { min-width: 0; flex: 1; display: grid; }
+.menu-head strong, .menu-head .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 8px; margin-bottom: 4px; border-block: 1px solid var(--border); }
+.menu > a, .menu > button {
+  display: flex; align-items: center; gap: 12px; padding: 9px 10px; border-radius: 10px; color: var(--text); text-decoration: none;
+  font-size: 14.5px; background: none; border: 0; text-align: left; cursor: pointer; width: 100%;
+}
+.menu > a:hover, .menu > button:hover { background: var(--bg-2); }
+.menu > a svg, .menu > button svg { width: 18px; height: 18px; flex: none; color: var(--text-2); }
+.theme-seg button { padding: 5px 11px; font-size: 13px; }
+.modal .menu-head { padding: 2px 4px 14px; border-bottom: 1px solid var(--border); margin-bottom: 8px; }
+.modal .menu-row { margin: 8px 0 0; padding: 14px 12px 4px; border-bottom: 0; }
+
+/* Confirm dialog: sits above an open drawer or modal, and returns to it on cancel */
+.ask-scrim { z-index: 60; }
+.modal.ask { z-index: 61; width: min(400px, calc(100vw - 32px)); padding: 24px; }
+.modal.ask h2 { font-size: 21px; line-height: 1.25; margin: 0 0 8px; }
+.modal.ask p { margin: 0; line-height: 1.5; }
+.ask-btns { justify-content: flex-end; gap: 10px; margin-top: 22px; }
+.btn.danger.solid { background: var(--warn); border-color: var(--warn); color: var(--surface); }
+.btn.danger.solid:hover { background: color-mix(in srgb, var(--warn) 88%, var(--text)); }
+
+/* A button that is waiting on the server shows a spinner in place of its label */
+.btn.loading { position: relative; color: transparent !important; pointer-events: none; }
+.btn.loading:disabled { opacity: .8; }
+.btn.loading::after {
+  content: ""; position: absolute; inset: 0; margin: auto; width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid var(--text); border-right-color: transparent; animation: spin .7s linear infinite;
+}
+.btn.primary.loading::after { border-color: var(--ink-text); border-right-color: transparent; }
+.btn.danger.solid.loading::after { border-color: var(--surface); border-right-color: transparent; }
+@keyframes spin { to { transform: rotate(1turn); } }
+
+/* Placeholder shapes while a page loads; held back briefly so fast loads don't flash */
+.skel { animation: fade .3s .12s both; }
+.sk {
+  display: block; height: 12px; margin: 12px 0; border-radius: 6px; background-size: 300% 100%; animation: shimmer 1.5s linear infinite;
+  background-image: linear-gradient(90deg, var(--track) 30%, color-mix(in srgb, var(--track) 50%, var(--surface)) 45%, var(--track) 60%);
+}
+.sk.big { height: 30px; width: 58%; border-radius: 8px; }
+.sk.w30 { width: 30%; } .sk.w40 { width: 40%; } .sk.w60 { width: 60%; } .sk.w80 { width: 80%; }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+
+/* Password strength */
+.pw-meter { display: flex; align-items: center; gap: 10px; }
+.pw-bars { flex: 1; display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.pw-bars i { height: 4px; border-radius: 2px; background: var(--track); transition: background .25s var(--ease); }
+.pw-meter[data-score="1"] .pw-bars i:nth-child(-n+1) { background: var(--warn); }
+.pw-meter[data-score="2"] .pw-bars i:nth-child(-n+2) { background: #c9962e; }
+.pw-meter[data-score="3"] .pw-bars i:nth-child(-n+3), .pw-meter[data-score="4"] .pw-bars i { background: var(--good); }
+.pw-label { min-width: 104px; text-align: right; font-size: 12px; font-weight: 400; color: var(--muted); }
+
+/* Where you're signed in */
+.sessions { list-style: none; margin: 14px 0 0; padding: 0; }
+.sessions li { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
+.sessions li > svg { flex: none; width: 22px; height: 22px; color: var(--text-2); }
+.sessions li > div { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.sessions strong { font-weight: 500; font-size: 14.5px; }
+
+@media (max-width: 980px) {
+  .ask-btns .btn { flex: 1; justify-content: center; min-height: 46px; }
+  .modal.ask { padding: 12px 20px calc(20px + env(safe-area-inset-bottom)); }
+}

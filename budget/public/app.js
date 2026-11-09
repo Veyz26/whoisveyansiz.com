@@ -49,13 +49,100 @@ async function download(path) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
-function toast(msg) {
+function toast(msg, kind = "ok") {
   $$(".toast").forEach((t) => t.remove());
-  const t = Object.assign(document.createElement("div"), { className: "toast", textContent: msg });
+  const t = Object.assign(document.createElement("div"), { className: `toast ${kind}`, innerHTML: `${icon(kind === "err" ? "alert" : "check")}<span></span>` });
+  t.setAttribute("role", kind === "err" ? "alert" : "status");
+  t.lastChild.textContent = msg;
   document.body.appendChild(t);
-  setTimeout(() => t.remove(), 3200);
+  setTimeout(() => t.remove(), kind === "err" ? 5200 : 3200);
 }
-function fail(e) { toast(e.message || String(e)); }
+function fail(e) { toast(e.message || String(e), "err"); }
+
+// Shows a spinner on a button while its request runs, and stops double taps.
+async function busy(btn, work) {
+  if (!btn || btn.classList.contains("loading")) return;
+  btn.classList.add("loading"); btn.disabled = true;
+  try { return await work(); }
+  finally { btn.classList.remove("loading"); btn.disabled = false; }
+}
+
+// Placeholder blocks shown while a page's data loads.
+const skeleton = (cards = 2) => `<div class="skel" aria-busy="true" aria-label="Loading">
+  <div class="kpis">${`<div class="card kpi"><i class="sk w40"></i><i class="sk big"></i><i class="sk w60"></i></div>`.repeat(3)}</div>
+  ${`<div class="card"><i class="sk w30"></i><i class="sk"></i><i class="sk w80"></i><i class="sk w60"></i></div>`.repeat(cards)}</div>`;
+
+// ---------------------------------------------------------------- appearance
+// "auto" follows the device; "light" and "dark" are this browser's own choice.
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch { /* private window */ } },
+};
+const theme = () => (["light", "dark"].includes(store.get("theme")) ? store.get("theme") : "auto");
+function applyTheme(t = theme()) {
+  const root = document.documentElement;
+  if (t === "auto") delete root.dataset.theme; else root.dataset.theme = t;
+  // The browser bar follows the page: both tags get the chosen colour, or their own again on "auto".
+  $$('meta[name="theme-color"]').forEach((m) => {
+    m.dataset.auto = m.dataset.auto || m.content;
+    m.content = t === "auto" ? m.dataset.auto : t === "dark" ? "#171310" : "#f6f1ea";
+  });
+}
+function setTheme(t) { store.set("theme", t === "auto" ? null : t); applyTheme(t); S.fx?.recolor?.(); }
+applyTheme();
+const themeSeg = () => `<div class="seg theme-seg" role="group" aria-label="Appearance">${[["auto", "Auto"], ["light", "Light"], ["dark", "Dark"]]
+  .map(([k, l]) => `<button type="button" data-theme-set="${k}" class="${theme() === k ? "on" : ""}">${l}</button>`).join("")}</div>`;
+function bindThemeSeg(box) {
+  $$("[data-theme-set]", box).forEach((b) => (b.onclick = () => {
+    setTheme(b.dataset.themeSet);
+    $$("[data-theme-set]", box).forEach((x) => x.classList.toggle("on", x === b));
+  }));
+}
+
+async function signOut(all = false) {
+  await api(all ? "api/auth/logout-all" : "api/auth/logout", { method: "POST", body: {} }).catch(() => {});
+  S.me = false; go(all ? "#/signin" : "#/");
+}
+
+// The last person who signed in on this device, so the sign-in page can greet them by name.
+const lastUser = () => { try { const u = JSON.parse(store.get("lastUser")); return u?.email ? u : null; } catch { return null; } };
+function rememberUser() {
+  const u = S.me?.user;
+  if (!u?.id || !u.email || S.me.household?.is_demo) return;
+  store.set("lastUser", JSON.stringify({ name: String(u.name || "").trim().split(/\s+/)[0], email: u.email }));
+}
+
+// "3 minutes ago" from the server's UTC timestamps.
+function ago(utc) {
+  const mins = Math.round((Date.now() - Date.parse(utc.replace(" ", "T") + "Z")) / 60000);
+  if (!(mins >= 2)) return "just now";
+  if (mins < 60) return `${mins} minutes ago`;
+  const h = Math.round(mins / 60);
+  if (h < 24) return h === 1 ? "an hour ago" : `${h} hours ago`;
+  const d = Math.round(h / 24);
+  return d === 1 ? "yesterday" : `${d} days ago`;
+}
+
+// Password strength, in step with the server's rule (10+ characters, not all the same few).
+const pwMeter = () => `<span class="pw-meter" data-score="0"><span class="pw-bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="pw-label" aria-live="polite"></span></span>`;
+function pwScore(p) {
+  if (!p) return [0, ""];
+  if (p.length < 10) return [1, `${10 - p.length} more character${p.length === 9 ? "" : "s"}`];
+  const uniq = new Set(p).size;
+  if (uniq < 5) return [1, "Too repetitive"];
+  const kinds = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter((r) => r.test(p)).length;
+  const n = 2 + (p.length >= 14 || kinds >= 3) + (p.length >= 16 && uniq >= 9 && kinds >= 2);
+  return [n, ["", "", "Fair", "Good", "Strong"][n]];
+}
+function bindPwMeters(box) {
+  $$(".pw-meter", box).forEach((m) => {
+    const input = $("input", m.closest("label"));
+    input.addEventListener("input", () => {
+      const [n, label] = pwScore(input.value);
+      m.dataset.score = n; $(".pw-label", m).textContent = label;
+    });
+  });
+}
 
 const tip = () => $("#tooltip");
 function showTip(html, x, y) {
@@ -88,8 +175,39 @@ function drawer(html, onMount) {
   onMount?.(box);
   return box;
 }
-function closeOverlays() { $$(".scrim, .modal, .drawer").forEach((e) => e.remove()); }
+function closeOverlays() { $$(".scrim:not(.ask-scrim), .modal:not(.ask), .drawer, .menu").forEach((e) => e.remove()); }
 addEventListener("keydown", (e) => { if (e.key === "Escape") closeOverlays(); });
+
+// An in-app "are you sure?": resolves true or false. It sits above an open drawer or modal and leaves it
+// in place, so saying no returns to where you were.
+function ask(title, { body = "", yes = "Confirm", no = "Cancel", danger = false } = {}) {
+  S.askDone?.(false);
+  return new Promise((resolve) => {
+    const scrim = Object.assign(document.createElement("div"), { className: "scrim ask-scrim" });
+    const box = Object.assign(document.createElement("div"), { className: "modal ask", innerHTML: `
+      <h2 id="ask-t">${esc(title)}</h2>${body ? `<p class="muted">${esc(body)}</p>` : ""}
+      <div class="row ask-btns"><button type="button" class="btn" data-a="no">${esc(no)}</button>
+        <button type="button" class="btn ${danger ? "danger solid" : "primary"}" data-a="yes">${esc(yes)}</button></div>` });
+    box.setAttribute("role", "alertdialog"); box.setAttribute("aria-modal", "true"); box.setAttribute("aria-labelledby", "ask-t");
+    const back = document.activeElement;
+    const done = (v) => {
+      S.askDone = null; removeEventListener("keydown", key, true);
+      scrim.remove(); box.remove(); back?.focus?.(); resolve(v);
+    };
+    const key = (e) => {
+      if (e.key === "Escape") { e.stopImmediatePropagation(); done(false); }
+      // Keep Tab inside the two buttons.
+      if (e.key === "Tab") { e.preventDefault(); $(`[data-a=${document.activeElement?.dataset.a === "yes" ? "no" : "yes"}]`, box).focus(); }
+    };
+    addEventListener("keydown", key, true);
+    S.askDone = done;
+    scrim.onclick = () => done(false);
+    $("[data-a=no]", box).onclick = () => done(false);
+    $("[data-a=yes]", box).onclick = () => done(true);
+    document.body.append(scrim, box);
+    $(`[data-a=${danger ? "no" : "yes"}]`, box).focus();
+  });
+}
 
 const I = {
   home: '<path d="M4 11 12 4l8 7v8a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/>',
@@ -108,6 +226,11 @@ const I = {
   share: '<path d="M12 3v12M8 7l4-4 4 4"/><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/>',
   arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   upload: '<path d="M12 15V4M7 9l5-5 5 5"/><path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  alert: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.2"/>',
+  out: '<path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"/><path d="M10 8l-4 4 4 4M6 12h10"/>',
+  phone: '<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/>',
+  laptop: '<rect x="4" y="5" width="16" height="11" rx="2"/><path d="M2 19.5h20"/>',
   face: '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M9 9v1.5M15 9v1.5M12 9v4h-1M9.5 15.5a3.5 3.5 0 0 0 5 0"/>',
 };
 const icon = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n]}</svg>`;
@@ -129,14 +252,14 @@ const go = (h) => { if (location.hash === h) route(); else location.hash = h; };
 addEventListener("hashchange", route);
 
 async function route() {
-  closeOverlays(); hideTip();
+  closeOverlays(); hideTip(); S.askDone?.(false);
   S.fx?.dispose(); S.fx = null;
   S.pkWait?.abort(); S.pkWait = null;
   const [path, query] = location.hash.slice(1).split("?");
   const parts = path.split("/").filter(Boolean);
   if (!S.config) { S.config = await api("api/config").catch(() => ({ demo: false, plans: {}, private_mode: true })); APP = S.config.app_name || APP; }
   if (S.me === null) {
-    try { S.me = await api("api/me"); S.month = S.month || S.me.this_month; }
+    try { S.me = await api("api/me"); S.month = S.month || S.me.this_month; rememberUser(); }
     catch (e) { if (e.offline) return offlineScreen(); S.me = false; }
   }
   const priv = S.config.private_mode;
@@ -144,6 +267,7 @@ async function route() {
   const key = parts[0] || "";
   if (!S.me || (key in pub && key !== "")) {
     if (!S.me && key in PAGES) return go("#/signin");
+    document.title = APP;
     const page = (pub[key] || pub[""])(parts, new URLSearchParams(query || ""));
     authBackdrop();
     return page;
@@ -151,6 +275,7 @@ async function route() {
   if (S.me.passkeys?.required && S.me.user.id && !S.me.passkeys.count) { passkeySetup(); return authBackdrop(); }
   if (S.addDevice) { S.addDevice = false; passkeySetup(true); return authBackdrop(); }
   const name = key in PAGES ? key : "overview";
+  document.title = `${PAGES[name].title} · ${APP}`;
   renderShell(name);
   try { await PAGES[name].render($("#content"), new URLSearchParams(query || "")); }
   catch (e) { $("#content").innerHTML = `<div class="card empty"><h3>Couldn't load this page</h3><p>${esc(e.message)}</p></div>`; }
@@ -227,9 +352,9 @@ function signin(parts, q) {
     <h1 style="margin-top:${priv ? 14 : 0}px">${priv ? "Our budget" : "Welcome back"}</h1>
     <p class="muted">${priv ? "Only invited people can sign in." : "Sign in to your household budget."}</p>
     ${err ? `<div class="banner warn" style="margin:16px 0 0">${esc(err)}</div>` : ""}
-    ${hasPasskeys() ? `<button class="btn primary" id="pk-login" style="justify-content:center;width:100%;margin-top:22px">${icon("face")} Sign in with Face ID</button>
+    ${hasPasskeys() ? `<button class="btn primary" id="pk-login" style="justify-content:center;width:100%;margin-top:22px">${icon("face")} Sign in with ${BIO}</button>
       <div class="error" id="pk-err" style="margin-top:8px;text-align:center"></div>
-      ${S.config.password_login ? `<p class="small muted" style="text-align:center;margin:4px 0 0">New phone or computer? Sign in below with your password and a recovery code, then add Face ID on it.</p>` : ""}` : ""}
+      ${S.config.password_login ? `<p class="small muted" style="text-align:center;margin:4px 0 0">New phone or computer? Sign in below with your password and a recovery code, then add ${BIO} on it.</p>` : ""}` : ""}
     ${S.config.microsoft ? `<a class="btn ${hasPasskeys() ? "" : "primary"} ms" href="api/auth/microsoft/start" style="justify-content:center;width:100%;margin-top:22px">
       <svg viewBox="0 0 21 21" width="16" height="16" aria-hidden="true"><path fill="#f25022" d="M1 1h9v9H1z"/><path fill="#7fba00" d="M11 1h9v9h-9z"/><path fill="#00a4ef" d="M1 11h9v9H1z"/><path fill="#ffb900" d="M11 11h9v9h-9z"/></svg>
       Sign in with Microsoft</a>
@@ -249,18 +374,21 @@ function signin(parts, q) {
   $("#f")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
-    try {
-      await api("api/auth/login", { method: "POST", body: { email: f.get("email"), password: f.get("password"), recovery_code: f.get("recovery") || null } });
-      // A recovery code means this device has no passkey yet: offer to add one.
-      S.me = null; S.addDevice = !!f.get("recovery") && hasPasskeys(); go("#/overview");
-    }
-    catch (err) {
-      $("#err").textContent = err.message;
-      if (err.data?.need_recovery_code) { $("#rc-row").classList.remove("hidden"); $("[name=recovery]").focus(); }
-    }
+    $("#err").textContent = "";
+    await busy($("button:not([type=button])", e.target), async () => {
+      try {
+        await api("api/auth/login", { method: "POST", body: { email: f.get("email"), password: f.get("password"), recovery_code: f.get("recovery") || null } });
+        // A recovery code means this device has no passkey yet: offer to add one.
+        S.me = null; S.addDevice = !!f.get("recovery") && hasPasskeys(); go("#/overview");
+      }
+      catch (err) {
+        $("#err").textContent = err.message;
+        if (err.data?.need_recovery_code) { $("#rc-row").classList.remove("hidden"); $("[name=recovery]").focus(); }
+      }
+    });
   });
   $("#pk-login")?.addEventListener("click", (e) => faceIdSignIn(e.currentTarget, $("#pk-err"),
-    "Face ID was cancelled, or this device has no passkey for this site yet. On a new device, use your password and a recovery code."));
+    `${Bio} was cancelled, or this device has no passkey for this site yet. On a new device, use your password and a recovery code.`));
   prefetchPasskey();
   passkeyAutofill($("#pk-err"));
 }
@@ -275,13 +403,14 @@ function privateSignin(parts, q) {
 
 const pwField = (ac) => `<label class="field">Password<span class="pw">
   <input type="password" name="password" autocomplete="${ac}" required${ac === "new-password" ? ` minlength="10" placeholder="At least 10 characters"` : ""}>
-  <button type="button" class="pw-toggle" aria-label="Show password">Show</button></span></label>`;
+  <button type="button" class="pw-toggle" aria-label="Show password">Show</button></span>${ac === "new-password" ? pwMeter() : ""}</label>`;
 
 function authStep(step, ctx = {}) {
   const box = $("#auth");
   if (!box) return;
   S.pkWait?.abort(); S.pkWait = null;
   const { email = "", name = "" } = ctx;
+  const back = step === "start" && !email && !ctx.other ? lastUser() : null;
   const hi = `<h1>Hi ${esc(name || "there")}</h1>`;
   const who = `<button type="button" class="who" id="who" aria-label="Use a different email">
     <span class="avatar" aria-hidden="true">${esc((name || email || "?")[0].toUpperCase())}</span><span class="who-email">${esc(email)}</span><span class="who-change">Change</span></button>`;
@@ -289,11 +418,19 @@ function authStep(step, ctx = {}) {
   const user = `<input class="sr" type="email" name="username" autocomplete="username" value="${esc(email)}" tabindex="-1" aria-hidden="true" readonly>`;
   const face = (label) => hasPasskeys() ? `<button type="button" class="btn primary xl" id="pk">${icon("face")} ${label}</button>` : "";
   const views = {
-    start: () => `
+    start: () => back ? `
+      <span class="avatar lg" aria-hidden="true">${esc((back.name || back.email)[0].toUpperCase())}</span>
+      <h1>Welcome back${back.name ? `, ${esc(back.name)}` : ""}</h1>
+      <p class="muted lead who-email">${esc(back.email)}</p>
+      ${face(`Sign in with ${BIO}`)}
+      <form id="f"><input type="hidden" name="email" value="${esc(back.email)}">
+        <button class="btn xl${hasPasskeys() ? "" : " primary"}">Use my password</button></form>
+      <div class="error" id="err" role="alert">${esc(ctx.error || "")}</div>
+      <p class="foot"><button type="button" class="link" id="other">Not ${esc(back.name || "you")}? Use a different account</button></p>` : `
       <span class="chip">Private</span>
       <h1>Sign in</h1>
       <p class="muted lead">Your household budget, for invited people only.</p>
-      ${face("Sign in with Face ID")}
+      ${face(`Sign in with ${BIO}`)}
       ${hasPasskeys() ? `<div class="or"><span>or continue with email</span></div>` : ""}
       <form id="f" class="inline-form" novalidate>
         <label class="sr" for="email">Email</label>
@@ -303,21 +440,21 @@ function authStep(step, ctx = {}) {
       </form>
       ${S.config.microsoft ? `<a class="btn xl ms" href="api/auth/microsoft/start">Continue with Microsoft</a>` : ""}`,
     passkey: () => `${who}${hi}
-      <p class="muted lead">${hasPasskeys() ? "Sign in with Face ID." : "This browser can't use Face ID. Use your password and a recovery code."}</p>
-      ${face("Use Face ID")}
+      <p class="muted lead">${hasPasskeys() ? `Sign in with ${BIO}.` : "This browser can't use passkeys. Use your password and a recovery code."}</p>
+      ${face(`Use ${BIO}`)}
       <div class="error" id="err" role="alert">${esc(ctx.error || "")}</div>
-      <details class="alt"${hasPasskeys() ? "" : " open"}><summary>New phone or computer?</summary>
-        <p class="small muted">Use your password and one recovery code, once. Then add Face ID on this device.</p>
+      <details class="alt"${hasPasskeys() && !ctx.open ? "" : " open"}><summary>New phone or computer?</summary>
+        <p class="small muted">Use your password and one recovery code, once. Then add ${BIO} on this device.</p>
         <form id="f">${user}${pwField("current-password")}
           <label class="field">Recovery code<input type="text" name="recovery" autocomplete="one-time-code" placeholder="XXXXX-XXXXX" spellcheck="false" autocapitalize="characters" required></label>
           <button class="btn xl">Sign in</button><div class="error" role="alert"></div></form>
       </details>`,
     password: () => `${who}${hi}
-      <p class="muted lead">Enter your password${S.config.require_passkey ? ", then add Face ID" : ""}.</p>
+      <p class="muted lead">Enter your password${S.config.require_passkey ? `, then add ${BIO}` : ""}.</p>
       <form id="f">${user}${pwField("current-password")}<button class="btn primary xl">Sign in</button></form>`,
     new: () => `${who}
       <h1>Create your account</h1>
-      <p class="muted lead">You're on the invite list. Next you'll add Face ID.</p>
+      <p class="muted lead">You're on the invite list. Next you'll add ${BIO}.</p>
       <form id="f">${user}
         <label class="field">Your name<input type="text" name="name" autocomplete="given-name" maxlength="60" required></label>
         <label class="field">Setup phrase<input type="text" name="setup_code" autocomplete="off" placeholder="From the owner" spellcheck="false" autocapitalize="off" autocorrect="off" required>
@@ -336,17 +473,19 @@ function authStep(step, ctx = {}) {
 
   const err = $("#err", box), form = $("#f", box);
   const say = (m) => { ($(".error", form) || err).textContent = m; };
-  $("#who", box)?.addEventListener("click", () => authStep("start", { email }));
+  $("#who", box)?.addEventListener("click", () => authStep("start", { email, other: true }));
+  $("#other", box)?.addEventListener("click", () => { store.set("lastUser", null); authStep("start", { other: true }); });
+  bindPwMeters(box);
   $("#try-demo", box)?.addEventListener("click", startDemo);
   box.querySelectorAll(".pw-toggle").forEach((b) => b.addEventListener("click", () => {
     const i = b.previousElementSibling, show = i.type === "password";
     i.type = show ? "text" : "password"; b.textContent = show ? "Hide" : "Show"; b.setAttribute("aria-label", show ? "Hide password" : "Show password");
   }));
   $("#pk", box)?.addEventListener("click", (e) => faceIdSignIn(e.currentTarget, err, step === "start"
-    ? "No Face ID for KAVE on this device yet? Continue with your email."
-    : "Face ID didn't go through. Try again, or use \u201cNew phone or computer?\u201d"));
+    ? back ? "No passkey for this site on this device yet? Use your password." : "No passkey for this site on this device yet? Continue with your email."
+    : `${Bio} didn't go through. Try again, or use \u201cNew phone or computer?\u201d`));
   if (hasPasskeys() && (step === "start" || step === "passkey")) prefetchPasskey();
-  if (step === "start") passkeyAutofill(err);
+  if ($("#email", box)) passkeyAutofill(err);
   // Phones: open the keyboard only where typing is the next thing to do.
   if (step === "password" || step === "new") $("input:not(.sr)", form)?.focus();
 
@@ -354,13 +493,14 @@ function authStep(step, ctx = {}) {
     e.preventDefault();
     if (!form.checkValidity()) return form.reportValidity();
     const f = new FormData(form), btn = $("button:not([type=button])", form);
-    btn.disabled = true; say("");
+    btn.disabled = true; btn.classList.add("loading"); say("");
     try {
       if (step === "start") {
         const to = String(f.get("email")).trim();
         const r = await api("api/auth/lookup", { method: "POST", body: { email: to } });
         if (r.next === "not_invited") throw new Error("That email isn't on the invite list. Check for a typo, or ask the owner to add it.");
-        return authStep(r.next, { email: to, name: r.name });
+        // "Use my password" on an account with a passkey: open the password + recovery code form.
+        return authStep(r.next, { email: to, name: r.name, open: !!back });
       }
       if (step === "new") {
         await api("api/auth/signup", { method: "POST", body: { name: f.get("name"), email, password: f.get("password"), setup_code: f.get("setup_code"),
@@ -373,7 +513,7 @@ function authStep(step, ctx = {}) {
     } catch (x) {
       // The account got Face ID since the email check: switch to that step.
       if (x.data?.need_recovery_code && step === "password") return authStep("passkey", { email, name, error: x.message });
-      say(x.message); btn.disabled = false;
+      say(x.message); btn.disabled = false; btn.classList.remove("loading");
     }
   });
 }
@@ -394,12 +534,12 @@ async function loginOptions() {
 }
 
 async function faceIdSignIn(btn, err, notAllowed) {
-  btn.disabled = true; err.textContent = "";
+  btn.disabled = true; btn.classList.add("loading"); err.textContent = "";
   // One passkey request at a time: stop the email field's autofill request and let it finish first.
   S.pkWait?.abort(); S.pkWait = null;
   await pkSettled;
   try { await passkeySignIn(); S.me = null; go("#/overview"); }
-  catch (e) { err.textContent = passkeyError(e, notAllowed); btn.disabled = false; prefetchPasskey(); }
+  catch (e) { err.textContent = passkeyError(e, notAllowed); btn.disabled = false; btn.classList.remove("loading"); prefetchPasskey(); }
 }
 
 // Offers this device's passkeys in the email field's suggestions (Safari's QuickType bar, Chrome's
@@ -423,33 +563,36 @@ function signup(parts) {
   const invite = parts[0] === "join" ? parts[1] : null;
   $("#root").innerHTML = `<div class="public">${pubNav()}<div class="auth-wrap"><div class="card auth">
     <h1>${invite ? "Join your household" : S.config.private_mode ? "Set up your account" : "Start your free trial"}</h1>
-    <p class="muted">${invite ? "Your partner invited you to share a budget." : S.config.private_mode ? "Only emails on the invite list can set up an account. Next you'll add Face ID." : "30 days free. Setting up takes two minutes."}</p>
+    <p class="muted">${invite ? "Your partner invited you to share a budget." : S.config.private_mode ? `Only emails on the invite list can set up an account. Next you'll add ${BIO}.` : "30 days free. Setting up takes two minutes."}</p>
     <form id="f">
       <label class="field">Your name <input type="text" name="name" autocomplete="given-name" required maxlength="60"></label>
       ${invite || S.config.private_mode ? "" : `<label class="field">Partner's name <span class="muted" style="font-weight:400">(optional, adds them to the budget)</span><input type="text" name="partner" maxlength="40"></label>`}
       <label class="field">Email <input type="email" name="email" autocomplete="email" required></label>
       ${S.config.private_mode && !invite ? `<label class="field">Setup phrase <span class="muted" style="font-weight:400">(from the owner)</span><input type="text" name="setup_code" autocomplete="one-time-code" spellcheck="false" required></label>` : ""}
-      <label class="field">Password <input type="password" name="password" autocomplete="new-password" minlength="10" required>
-        <span class="small muted" style="font-weight:400">At least 10 characters.</span></label>
+      <label class="field">Password <input type="password" name="password" autocomplete="new-password" minlength="10" placeholder="At least 10 characters" required>${pwMeter()}</label>
       <div class="consents">
         <label class="check"><input type="checkbox" name="service" required> <span>I've read the <a href="#/privacy" target="_blank">privacy notice</a> and agree to ${APP} processing my household's budget information to provide the service.</span></label>
         <label class="check"><input type="checkbox" name="updates"> <span>Optional: email me product updates.</span></label>
       </div>
       <div class="error" id="err"></div>
-      <button class="btn primary" style="justify-content:center">${invite ? "Join household" : S.config.private_mode ? "Continue to Face ID" : "Create account"}</button>
+      <button class="btn primary" style="justify-content:center">${invite ? "Join household" : S.config.private_mode ? "Continue" : "Create account"}</button>
       <p class="small muted" style="text-align:center">Already have an account? <a href="#/signin">Sign in</a></p>
     </form></div></div></div>`;
   $("#f").onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
-    try {
-      await api("api/auth/signup", { method: "POST", body: {
-        name: f.get("name"), partner_name: f.get("partner") || null, email: f.get("email"), password: f.get("password"), invite, setup_code: f.get("setup_code") || null,
-        consents: { service: !!f.get("service"), product_updates: !!f.get("updates") },
-      } });
-      S.me = null; go("#/overview");
-    } catch (err) { $("#err").textContent = err.message; }
+    $("#err").textContent = "";
+    await busy($("button:not([type=button])", e.target), async () => {
+      try {
+        await api("api/auth/signup", { method: "POST", body: {
+          name: f.get("name"), partner_name: f.get("partner") || null, email: f.get("email"), password: f.get("password"), invite, setup_code: f.get("setup_code") || null,
+          consents: { service: !!f.get("service"), product_updates: !!f.get("updates") },
+        } });
+        S.me = null; go("#/overview");
+      } catch (err) { $("#err").textContent = err.message; }
+    });
   };
+  bindPwMeters($("#f"));
 }
 
 function privacyPage() {
@@ -476,6 +619,16 @@ function privacyPage() {
 const hasPasskeys = () => !!(window.PublicKeyCredential && navigator.credentials);
 const fromB64u = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)), (c) => c.charCodeAt(0)).buffer;
 const toB64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+// What this device calls its passkey prompt, for buttons and messages ("Sign in with Touch ID").
+const APPLE = /iPhone|iPad|Macintosh/.test(navigator.userAgent);
+const BIO = (() => {
+  const ua = navigator.userAgent;
+  if (/iPhone|iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return "Face ID";
+  if (/Macintosh/.test(ua)) return "Touch ID";
+  if (/Windows/.test(ua)) return "Windows Hello";
+  return "a passkey";
+})();
+const Bio = BIO[0].toUpperCase() + BIO.slice(1);
 function deviceName() {
   const ua = navigator.userAgent;
   if (/iPhone/.test(ua)) return "iPhone";
@@ -485,11 +638,11 @@ function deviceName() {
   if (/Windows/.test(ua)) return "Windows PC";
   return "This device";
 }
-function passkeyError(e, notAllowed = "Face ID was cancelled or timed out.") {
+function passkeyError(e, notAllowed = `${Bio} was cancelled or timed out.`) {
   if (e?.name === "NotAllowedError") return notAllowed;
   if (e?.name === "InvalidStateError") return "This device already has a passkey for this account.";
   if (e?.name === "SecurityError") return "Passkeys only work on the real website address (https).";
-  return e?.message || "Something went wrong with Face ID.";
+  return e?.message || `Something went wrong with ${BIO}.`;
 }
 
 async function passkeySignIn({ mediation, signal } = {}) {
@@ -532,32 +685,32 @@ function passkeySetup(again) {
   const ok = hasPasskeys();
   $("#root").innerHTML = `<div class="public">${pubNav()}<div class="auth-wrap"><div class="card auth" id="setup">
     <div class="step"><span class="chip">${again ? "New device" : "Last step"}</span>
-    <h1>${again ? "Add Face ID here" : "Add Face ID"}</h1>
+    <h1>${again ? `Add ${BIO} here` : `Add ${BIO}`}</h1>
     <p class="muted lead">${again
-      ? "Next time, this device signs in with your face. No code needed."
-      : "Sign in with your face from now on, so a stolen password isn't enough. It's saved on this device (and your other Apple devices through iCloud Keychain)."}</p>
+      ? `Next time, this device signs you in with ${BIO}. No code needed.`
+      : `Sign in with ${BIO} from now on, so a stolen password isn't enough. It's saved on this device${APPLE ? " (and your other Apple devices through iCloud Keychain)" : ""}.`}</p>
     ${ok ? `<label class="field">Device name<input type="text" id="pk-name" value="${esc(deviceName())}" maxlength="40"></label>
-      <button class="btn primary xl" id="add-pk" style="margin-top:14px">${icon("face")} Add Face ID</button>
+      <button class="btn primary xl" id="add-pk" style="margin-top:14px">${icon("face")} Add ${BIO}</button>
       <div class="error" id="err" role="alert"></div>`
       : `<div class="banner warn" style="margin-top:18px">This browser doesn't support passkeys. Open this page in Safari on your iPhone or Mac, or a recent Chrome or Edge.</div>`}
     <p class="foot">${again ? `<button class="link" id="skip">Not now</button>` : `<button class="link" id="out">Sign out</button>`}</p></div>
   </div></div></div>`;
   $("#skip")?.addEventListener("click", () => go("#/overview"));
-  $("#out")?.addEventListener("click", async () => { await api("api/auth/logout", { method: "POST", body: {} }).catch(() => {}); S.me = false; go("#/"); });
+  $("#out")?.addEventListener("click", () => signOut());
   $("#add-pk")?.addEventListener("click", async (e) => {
-    e.target.disabled = true;
+    e.target.disabled = true; e.target.classList.add("loading");
     try {
       const r = await passkeyRegister($("#pk-name").value);
       await refreshMe();
-      if (!r.recovery_codes) { toast("Face ID added on this device"); return go("#/overview"); }
-      $("#setup").innerHTML = `<div class="step"><span class="chip good">Face ID added</span>
+      if (!r.recovery_codes) { toast(`${Bio} added on this device`); return go("#/overview"); }
+      $("#setup").innerHTML = `<div class="step"><span class="chip good">${Bio} added</span>
         <h1>Save your recovery codes</h1>
         <p class="muted lead">On a new phone or computer, you sign in once with your password and one of these. Each works once. Keep them in your password manager.</p>
         ${recoveryCodesHtml(r.recovery_codes || [])}
         <button class="btn primary xl" id="done" style="margin-top:22px">I've saved them</button></div>`;
       bindRecoveryCodes($("#setup"), r.recovery_codes || []);
       $("#done").onclick = () => go("#/overview");
-    } catch (err) { $("#err").textContent = passkeyError(err); e.target.disabled = false; }
+    } catch (err) { $("#err").textContent = passkeyError(err); e.target.disabled = false; e.target.classList.remove("loading"); }
   });
 }
 
@@ -570,11 +723,9 @@ function renderShell(name) {
   $("#root").innerHTML = `<div class="shell">
     <aside class="side">${brand()}<nav aria-label="Main">${nav}</nav>
       ${S.config.private_mode ? `<a class="back-link small" href="/">← Back to whoisveyansiz.com</a>` : ""}
-      <div class="who"><strong>${esc(S.me.user.name)}</strong>
-        <span class="muted">${esc(S.me.household.name)}</span>
-        <div class="row" style="margin-top:8px;justify-content:space-between">
-          <span class="chip ${b.status === "active" ? "good" : b.can_write ? "" : "warn"}">${planLabel(b)}</span>
-          <button class="link small" id="logout">Sign out</button></div></div>
+      <div class="acct"><button type="button" class="acct-btn" id="acct" aria-haspopup="menu" aria-expanded="false">
+        ${avatar()}<span class="acct-text"><strong>${esc(S.me.user.name)}</strong><span class="muted">${esc(S.me.household.name)} · ${planLabel(b)}</span></span>
+        <span class="acct-caret" aria-hidden="true"></span></button></div>
     </aside>
     <div class="main">
       <div class="topbar" id="topbar"><h1>${p.title}</h1>
@@ -585,7 +736,7 @@ function renderShell(name) {
         </div>` : ""}
         ${p.month ? `<div class="stepper"><button id="prev" aria-label="Previous month">‹</button><span>${monthName(S.month)}</span><button id="next" aria-label="Next month">›</button></div>` : ""}
       </div>
-      <div class="content" id="content"><div class="muted" style="padding:40px 0">Loading…</div></div>
+      <div class="content" id="content">${skeleton()}</div>
       <footer class="app-foot">${esc(APP)} gives general budgeting information based on what you enter. It isn't financial advice and doesn't recommend specific financial products. For advice on investments, insurance or debt, speak to a registered financial adviser or an NCR-registered debt counsellor.</footer>
     </div>
     <nav class="mob-nav" aria-label="Main">${MOBILE_TABS.map((k) => `<a href="#/${k}" class="${k === name ? "on" : ""}">${icon(PAGES[k].icon)}<span>${PAGES[k].short || PAGES[k].title}</span></a>`).join("")}
@@ -596,9 +747,39 @@ function renderShell(name) {
   $("#next")?.addEventListener("click", () => { S.month = addMonths(S.month, 1); route(); });
   $("#more").onclick = () => moreSheet(name);
   $("#upload").onclick = openUpload;
-  $("#logout").onclick = async () => { await api("api/auth/logout", { method: "POST", body: {} }).catch(() => {}); S.me = false; go("#/"); };
+  $("#acct").onclick = (e) => accountMenu(e.currentTarget);
   const tb = $("#topbar");
   onscroll = () => tb.classList.toggle("scrolled", scrollY > 4);
+}
+const planTone = (b) => (b.status === "active" ? "good" : b.can_write ? "" : "warn");
+const avatar = (cls = "") => `<span class="avatar ${cls}" aria-hidden="true">${esc((S.me.user.name || "?")[0].toUpperCase())}</span>`;
+
+// The account popover above the sidebar's account button.
+function accountMenu(btn) {
+  const open = $(".menu");
+  btn.setAttribute("aria-expanded", String(!open));
+  if (open) return open.remove();
+  const u = S.me.user, m = document.createElement("div");
+  m.className = "menu"; m.setAttribute("role", "menu"); m.setAttribute("aria-label", "Account");
+  m.innerHTML = `<div class="menu-head">${avatar("lg")}<div><strong>${esc(u.name)}</strong><span class="muted small">${esc(u.email || S.me.household.name)}</span></div>
+      <span class="chip ${planTone(S.me.billing)}">${planLabel(S.me.billing)}</span></div>
+    <div class="menu-row"><span class="small muted">Appearance</span>${themeSeg()}</div>
+    <a role="menuitem" href="#/settings?tab=security">${icon("shield")}<span>Security &amp; sign-in</span></a>
+    <a role="menuitem" href="#/settings">${icon("gear")}<span>Settings</span></a>
+    <button type="button" role="menuitem" id="menu-out">${icon("out")}<span>Sign out</span></button>`;
+  btn.parentElement.appendChild(m);
+  bindThemeSeg(m);
+  $("#menu-out", m).onclick = () => signOut();
+  const close = (e) => {
+    if (m.isConnected) {
+      if (e.type === "keydown" ? e.key !== "Escape" : m.contains(e.target) || btn.contains(e.target)) return;
+      m.remove(); btn.setAttribute("aria-expanded", "false");
+      if (e.type === "keydown") btn.focus();
+    }
+    removeEventListener("pointerdown", close, true); removeEventListener("keydown", close, true);
+  };
+  addEventListener("pointerdown", close, true); addEventListener("keydown", close, true);
+  $("a", m).focus({ preventScroll: true });
 }
 function planLabel(b) {
   if (S.me.household.is_demo) return "Demo";
@@ -839,7 +1020,7 @@ async function pageBudget(el) {
     <div class="sheet">${v.people.map((p) => personColumn(p)).join("")}</div>`;
   $("#redraft", el)?.addEventListener("click", async (e) => {
     const btn = e.currentTarget;  // e.currentTarget is null once the await below has run
-    if (!confirm("Redraft from your statements? Items you added, changed, ticked as paid or linked to a goal stay as they are.")) return;
+    if (!(await ask("Redraft from your statements?", { body: "Items you added, changed, ticked as paid or linked to a goal stay as they are.", yes: "Redraft" }))) return;
     btn.disabled = true;
     try {
       const r = await api("api/budget/draft", { method: "POST", body: {} });
@@ -955,7 +1136,7 @@ async function openLine(id, view) {
   $("[name=kind]", box).onchange = (e) => $("#to-row", box).classList.toggle("hidden", e.target.value !== "transfer");
   $("#chg", box).onclick = () => amountModal(l);
   $("#del", box).onclick = async () => {
-    if (!confirm(`Delete "${l.name}" and its history from every month?`)) return;
+    if (!(await ask(`Delete \u201c${l.name}\u201d?`, { body: "Its history is removed from every month. This can't be undone.", yes: "Delete", danger: true }))) return;
     try { await api(`api/budget/lines/${id}`, { method: "DELETE" }); closeOverlays(); toast("Deleted"); route(); } catch (e) { fail(e); }
   };
   $("#f", box).onsubmit = async (e) => {
@@ -1113,7 +1294,7 @@ async function pageGoals(el) {
   $$("[data-apply]", el).forEach((b) => (b.onclick = async () => {
     const [lineId, cut, cur, name] = [+b.dataset.apply, +b.dataset.cut, +b.dataset.cur, b.dataset.name];
     const from = addMonths(S.month, 1);
-    if (!confirm(`Reduce ${name} from ${zar(cur)} to ${zar(cur - cut)} from ${monthName(from)}?\n\nOnly do this if it's something you can genuinely spend less on. It won't change a contract, debit order or minimum repayment — cancel or renegotiate those with the provider first.`)) return;
+    if (!(await ask(`Reduce ${name} from ${zar(cur)} to ${zar(cur - cut)}?`, { body: `From ${monthName(from)}. Only do this if it's something you can genuinely spend less on. It won't change a contract, debit order or minimum repayment: cancel or renegotiate those with the provider first.`, yes: "Reduce it" }))) return;
     try { await api(`api/budget/lines/${lineId}/amount`, { method: "POST", body: { month: from, amount_cents: cur - cut, mode: "onward", note: "Cut back for a goal" } }); toast("Budget updated"); route(); }
     catch (e) { fail(e); }
   }));
@@ -1163,7 +1344,7 @@ function goalModal(g) {
       <label class="field">Whose goal <select name="who"><option value="">Shared</option>${memberOptions(g?.member_id)}</select></label></div>
     <div class="actions">${g ? `<button type="button" class="btn danger" id="del" style="margin-right:auto">Delete</button>` : ""}<button type="button" class="btn" data-close>Cancel</button><button class="btn primary">Save</button></div></form>`);
   if (g && !g.member_id) $("[name=who]", box).value = "";
-  $("#del", box)?.addEventListener("click", async () => { if (!confirm("Delete this goal?")) return; await api(`api/goals/${g.id}`, { method: "DELETE" }).catch(fail); closeOverlays(); route(); });
+  $("#del", box)?.addEventListener("click", async () => { if (!(await ask("Delete this goal?", { body: "Budget items linked to it stay in your budget.", yes: "Delete", danger: true }))) return; await api(`api/goals/${g.id}`, { method: "DELETE" }).catch(fail); closeOverlays(); route(); });
   $("#f", box).onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -1407,7 +1588,7 @@ async function pageReports(el) {
       $("#newtok").innerHTML = `<div class="banner" style="margin-top:12px;display:block"><b>Copy this token now.</b> It won't be shown again.<pre class="code" style="margin:8px 0 0">${esc(r.token)}</pre></div>`;
     } catch (err) { fail(err); }
   });
-  $$("[data-rev]", el).forEach((b) => (b.onclick = async () => { if (!confirm("Revoke this token? Reports using it will stop refreshing.")) return; await api(`api/tokens/${b.dataset.rev}`, { method: "DELETE" }).catch(fail); route(); }));
+  $$("[data-rev]", el).forEach((b) => (b.onclick = async () => { if (!(await ask("Revoke this token?", { body: "Reports using it will stop refreshing.", yes: "Revoke", danger: true }))) return; await api(`api/tokens/${b.dataset.rev}`, { method: "DELETE" }).catch(fail); route(); }));
 }
 
 // ---------------------------------------------------------------- settings
@@ -1471,7 +1652,7 @@ async function pageSettings(el, q) {
       ${owner && !demo && b.status === "active" ? `<button class="btn danger sm" id="cancel" style="margin-top:16px">Cancel plan</button>` : ""}
       <p class="small muted" style="margin-top:16px">Payment collection isn't connected yet${b.dev_mode ? "; test mode activates a plan without charging" : ""}.</p></div>`;
     $$("[data-sim]", box).forEach((x) => (x.onclick = async () => { try { await api("api/billing/simulate", { method: "POST", body: { plan: x.dataset.sim } }); await refreshMe(); toast("Plan activated (test mode)"); route(); } catch (e) { fail(e); } }));
-    $("#cancel")?.addEventListener("click", async () => { if (!confirm("Cancel your plan? You keep access until the end of the paid period.")) return; await api("api/billing/cancel", { method: "POST", body: {} }).catch(fail); await refreshMe(); route(); });
+    $("#cancel")?.addEventListener("click", async () => { if (!(await ask("Cancel your plan?", { body: "You keep access until the end of the paid period.", yes: "Cancel plan", no: "Keep plan", danger: true }))) return; await api("api/billing/cancel", { method: "POST", body: {} }).catch(fail); await refreshMe(); route(); });
   } else if (tab === "privacy") {
     const audit = await api("api/privacy/audit");
     const c = S.me.consents;
@@ -1494,18 +1675,25 @@ async function pageSettings(el, q) {
     $("#exp").onclick = () => download("api/privacy/export").catch(fail);
     $("#df")?.addEventListener("submit", async (e) => {
       e.preventDefault();
-      if (!confirm(owner ? "Delete the household and all its data permanently?" : "Leave this household?")) return;
-      try { await api(owner ? "api/privacy/delete-household" : "api/privacy/leave", { method: "POST", body: { password: new FormData(e.target).get("pw") } }); S.me = false; toast("Done"); go("#/"); } catch (err) { fail(err); }
+      if (!(await ask(owner ? "Delete the household?" : "Leave this household?", { body: owner ? "Everything in it is deleted for both of you, permanently." : "You'll lose access to this budget.", yes: owner ? "Delete everything" : "Leave", danger: true }))) return;
+      try { await api(owner ? "api/privacy/delete-household" : "api/privacy/leave", { method: "POST", body: { password: new FormData(e.target).get("pw") } }); S.me = false; store.set("lastUser", null); toast("Done"); go("#/"); } catch (err) { fail(err); }
     });
   } else {
     box.innerHTML = `<div class="grid g2" style="align-items:start"><div class="card"><h3>Change password</h3>
       ${demo ? `<p class="small muted">Not available in the demo.</p>` : `<form id="pf" style="display:grid;gap:12px">${S.me.user.has_password ? `<label class="field">Current password<input type="password" name="old" autocomplete="current-password" required></label>` : `<p class="small muted">You sign in with Microsoft. You can also set a password as a backup.</p>`}
-      <label class="field">New password<input type="password" name="new" autocomplete="new-password" minlength="10" required></label><button class="btn primary" style="justify-self:start">${S.me.user.has_password ? "Change password" : "Set password"}</button></form>`}</div>
-      <div class="card"><h3>Sessions</h3><p class="small muted">Signed in somewhere you don't recognise? Sign out everywhere, then change your password.</p><button class="btn" id="all">Sign out everywhere</button></div>
-      ${demo ? "" : `<div class="card" id="pk-card" style="grid-column:1/-1"><h3>Face ID &amp; passkeys</h3><p class="muted small">Loading…</p></div>`}</div>`;
+      <label class="field">New password<input type="password" name="new" autocomplete="new-password" minlength="10" placeholder="At least 10 characters" required>${pwMeter()}</label><button class="btn primary" style="justify-self:start">${S.me.user.has_password ? "Change password" : "Set password"}</button></form>`}</div>
+      <div class="card" id="sess-card"><h3>Where you're signed in</h3><i class="sk w60"></i><i class="sk"></i></div>
+      ${demo ? "" : `<div class="card" id="pk-card" style="grid-column:1/-1"><h3>Passkeys</h3><i class="sk w60"></i><i class="sk"></i></div>`}</div>`;
     if (!demo) renderPasskeyCard($("#pk-card"));
-    $("#pf")?.addEventListener("submit", async (e) => { e.preventDefault(); const f = new FormData(e.target); try { await api("api/auth/password", { method: "POST", body: { old: f.get("old"), new: f.get("new") } }); S.me = false; toast("Password changed. Please sign in again."); go("#/signin"); } catch (err) { fail(err); } });
-    $("#all").onclick = async () => { await api("api/auth/logout-all", { method: "POST", body: {} }).catch(() => {}); S.me = false; go("#/signin"); };
+    renderSessionsCard($("#sess-card"));
+    if ($("#pf")) bindPwMeters($("#pf"));
+    $("#pf")?.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      busy($("button", e.target), async () => {
+        try { await api("api/auth/password", { method: "POST", body: { old: f.get("old"), new: f.get("new") } }); S.me = false; toast("Password changed. Please sign in again."); go("#/signin"); } catch (err) { fail(err); }
+      });
+    });
   }
 }
 
@@ -1516,12 +1704,16 @@ const standalone = () => navigator.standalone === true || matchMedia("(display-m
 
 function moreSheet(current) {
   const items = Object.keys(PAGES).filter((k) => !MOBILE_TABS.includes(k));
-  const box = modal(`<h2>More</h2><nav class="sheet-list">
+  const box = modal(`<div class="menu-head">${avatar("lg")}<div><strong>${esc(S.me.user.name)}</strong><span class="muted small">${esc(S.me.household.name)}</span></div>
+      <span class="chip ${planTone(S.me.billing)}">${planLabel(S.me.billing)}</span></div>
+    <nav class="sheet-list" aria-label="More">
     ${items.map((k) => `<a href="#/${k}" class="${k === current ? "on" : ""}">${icon(PAGES[k].icon)}<span>${PAGES[k].title}</span></a>`).join("")}
     ${S.config.private_mode ? `<a href="/">${icon("house")}<span>whoisveyansiz.com</span></a>` : ""}
-    <button type="button" id="sheet-out">${icon("shield")}<span>Sign out</span></button></nav>`);
+    <button type="button" id="sheet-out">${icon("out")}<span>Sign out</span></button></nav>
+    <div class="menu-row"><span class="small muted">Appearance</span>${themeSeg()}</div>`);
+  bindThemeSeg(box);
   $$("a[href^='#/']", box).forEach((a) => a.addEventListener("click", closeOverlays));
-  $("#sheet-out", box).onclick = async () => { await api("api/auth/logout", { method: "POST", body: {} }).catch(() => {}); S.me = false; go("#/"); };
+  $("#sheet-out", box).onclick = () => signOut();
 }
 
 function offlineScreen() {
@@ -1556,23 +1748,46 @@ document.addEventListener("visibilitychange", () => {
 route().then(() => setTimeout(installHint, 1500));
 
 
+async function renderSessionsCard(card) {
+  let r;
+  try { r = await api("api/sessions"); } catch (e) { card.innerHTML = `<h3>Where you're signed in</h3><p class="small muted">${esc(e.message)}</p>`; return; }
+  const others = r.sessions.filter((x) => !x.current).length;
+  card.innerHTML = `<h3>Where you're signed in</h3>
+    <p class="small muted">Something you don't recognise? Sign it out, then change your password.</p>
+    <ul class="sessions">${r.sessions.map((x) => `<li>${icon(/iPhone|iPad|phone|tablet/.test(x.device) ? "phone" : "laptop")}
+      <div><strong>${esc(x.device)}</strong><span class="small muted">${x.current ? "Active now" : `Active ${ago(x.last_seen_at)}`} · signed in ${esc(new Date(x.created_at.replace(" ", "T") + "Z").toLocaleDateString(undefined, { day: "numeric", month: "short" }))}</span></div>
+      ${x.current ? `<span class="chip good">This device</span>` : `<button class="link small" data-sess="${esc(x.id)}">Sign out</button>`}</li>`).join("")}</ul>
+    <div class="row" style="margin-top:14px">${others ? `<button class="btn sm" id="others">Sign out other devices</button>` : ""}<button class="btn sm ghost" id="all">Sign out everywhere</button></div>`;
+  $$("[data-sess]", card).forEach((b) => (b.onclick = async () => {
+    try { await api(`api/sessions/${b.dataset.sess}`, { method: "DELETE" }); toast("Signed out on that device"); } catch (e) { fail(e); }
+    renderSessionsCard(card);
+  }));
+  $("#others", card)?.addEventListener("click", (e) => busy(e.currentTarget, async () => {
+    try { await api("api/auth/logout-others", { method: "POST", body: {} }); toast("Signed out everywhere else"); } catch (x) { fail(x); }
+    renderSessionsCard(card);
+  }));
+  $("#all", card).onclick = async () => {
+    if (await ask("Sign out everywhere?", { body: "Every device, including this one, will need to sign in again.", yes: "Sign out everywhere" })) signOut(true);
+  };
+}
+
 async function renderPasskeyCard(card) {
   const r = await api("api/passkeys");
-  card.innerHTML = `<div class="card-head"><h3>Face ID &amp; passkeys</h3>${hasPasskeys() ? `<button class="btn sm primary" id="pk-add">${icon("face")} Add this device</button>` : ""}</div>
-    <p class="muted small">Sign in with Face ID, Touch ID or your device PIN. Each device keeps its own passkey (Apple devices share theirs through iCloud Keychain). To add a new phone, sign in on it with your password and a recovery code, and it offers Face ID there.</p>
+  card.innerHTML = `<div class="card-head"><h3>Passkeys</h3>${hasPasskeys() ? `<button class="btn sm primary" id="pk-add">${icon("face")} Add this device</button>` : ""}</div>
+    <p class="muted small">Sign in with Face ID, Touch ID, Windows Hello or your device's screen lock. Each device keeps its own passkey (Apple devices share theirs through iCloud Keychain). To add a new phone or computer, sign in on it with your password and a recovery code, and it offers to add one there.</p>
     ${r.passkeys.length ? `<table class="t"><tbody>${r.passkeys.map((k) => `<tr><td>${esc(k.name)}<div class="small muted">Added ${esc(k.created_at.slice(0, 10))}${k.last_used_at ? ` · last used ${esc(k.last_used_at.slice(0, 10))}` : ""}</div></td>
       <td class="num"><button class="link small" data-pk-del="${k.id}">Remove</button></td></tr>`).join("")}</tbody></table>` : `<p class="small warn">No passkeys yet.</p>`}
     <div class="row" style="justify-content:space-between;margin-top:16px"><span class="small muted">${r.recovery_left} of 10 recovery codes left</span>
       <button class="btn sm" id="rc-new">New recovery codes</button></div><div id="rc-out"></div>`;
   $("#pk-add", card)?.addEventListener("click", async () => {
-    try { await passkeyRegister(deviceName()); toast("Passkey added"); renderPasskeyCard(card); } catch (e) { toast(passkeyError(e)); }
+    try { await passkeyRegister(deviceName()); toast("Passkey added"); renderPasskeyCard(card); } catch (e) { toast(passkeyError(e), "err"); }
   });
   $$("[data-pk-del]", card).forEach((b) => (b.onclick = async () => {
-    if (!confirm("Remove this passkey? That device will no longer sign in with Face ID.")) return;
+    if (!(await ask("Remove this passkey?", { body: "That device will need your password and a recovery code to sign in again.", yes: "Remove", danger: true }))) return;
     try { await api(`api/passkeys/${b.dataset.pkDel}`, { method: "DELETE" }); renderPasskeyCard(card); } catch (e) { fail(e); }
   }));
   $("#rc-new", card).onclick = async () => {
-    if (!confirm("Make new recovery codes? Your old ones will stop working.")) return;
+    if (!(await ask("Make new recovery codes?", { body: "Your old ones will stop working.", yes: "Make new codes" }))) return;
     try {
       const x = await api("api/passkeys/recovery-codes", { method: "POST", body: {} });
       $("#rc-out", card).innerHTML = `<p class="small" style="margin-top:12px"><b>Save these now.</b> They won't be shown again.</p>${recoveryCodesHtml(x.recovery_codes)}`;

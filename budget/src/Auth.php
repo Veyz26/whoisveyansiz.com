@@ -266,7 +266,7 @@ final class Auth
         // With a passkey on the account, a password alone isn't enough: it also takes a one-time recovery code.
         if (Passkeys::count($db, (int)$u['id']) > 0) {
             if ($recoveryCode === null || trim($recoveryCode) === '') {
-                throw new NeedsRecoveryCode('This account signs in with Face ID. Use the Face ID button, or enter one of your recovery codes.');
+                throw new NeedsRecoveryCode('This account signs in with a passkey (Face ID, Touch ID or Windows Hello). Use that, or enter one of your recovery codes.');
             }
             if (!Passkeys::use_recovery_code($db, (int)$u['id'], $recoveryCode)) {
                 $failed = (int)$u['failed_logins'] + 1;
@@ -312,7 +312,36 @@ final class Auth
         return $uid;
     }
 
-    public static function start_session(Conn $db, ?int $uid, ?int $hid = null): string
+    /** A short, human name for the browser a session was started from, e.g. "iPhone · Safari". */
+    public static function device_label(?string $userAgent): string
+    {
+        $ua = (string)$userAgent;
+        $has = fn(string ...$any) => (bool)array_filter($any, fn($n) => str_contains($ua, $n));
+        $device = match (true) {
+            $has('iPhone') => 'iPhone',
+            $has('iPad') => 'iPad',
+            $has('Android') => $has('Mobile') ? 'Android phone' : 'Android tablet',
+            $has('Macintosh') => 'Mac',
+            $has('Windows') => 'Windows PC',
+            $has('CrOS') => 'Chromebook',
+            $has('Linux') => 'Linux computer',
+            default => '',
+        };
+        $browser = match (true) {
+            $has('Edg/', 'EdgiOS/', 'EdgA/') => 'Edge',
+            $has('OPR/') => 'Opera',
+            $has('Firefox/', 'FxiOS/') => 'Firefox',
+            $has('SamsungBrowser/') => 'Samsung Internet',
+            $has('Chrome/', 'CriOS/') => 'Chrome',
+            $has('Safari/') => 'Safari',
+            // An app added to the iPhone Home Screen sends no browser name.
+            $has('iPhone', 'iPad') && $has('AppleWebKit') => 'Home Screen app',
+            default => '',
+        };
+        return implode(' · ', array_filter([$device, $browser])) ?: 'Unknown device';
+    }
+
+    public static function start_session(Conn $db, ?int $uid, ?int $hid = null, ?string $userAgent = null): string
     {
         if ($hid === null) {
             $hid = $db->val("SELECT household_id FROM memberships WHERE user_id = ? ORDER BY role = 'owner' DESC", [$uid]);
@@ -321,10 +350,11 @@ final class Auth
             }
         }
         $t = self::token();
-        $db->tx(function (Conn $db) use ($t, $uid, $hid) {
+        $device = self::device_label($userAgent ?? $_SERVER['HTTP_USER_AGENT'] ?? null);
+        $db->tx(function (Conn $db) use ($t, $uid, $hid, $device) {
             $db->exec('DELETE FROM sessions WHERE expires_at < ?', [self::now()]);
-            $db->exec('INSERT INTO sessions (token_hash, user_id, household_id, csrf_token, expires_at) VALUES (?, ?, ?, ?, ?)',
-                [self::token_hash($t), $uid, (int)$hid, self::token(24), self::now(self::SESSION_DAYS * 86400)]);
+            $db->exec('INSERT INTO sessions (token_hash, user_id, household_id, csrf_token, expires_at, device) VALUES (?, ?, ?, ?, ?, ?)',
+                [self::token_hash($t), $uid, (int)$hid, self::token(24), self::now(self::SESSION_DAYS * 86400), $device]);
             $db->audit((int)$hid, $uid, 'login');
         });
         return $t;
@@ -368,6 +398,52 @@ final class Auth
     public static function end_all_sessions(Conn $db, int $uid): void
     {
         $db->exec('DELETE FROM sessions WHERE user_id = ?', [$uid]);
+    }
+
+    /** The id shown for a session in "Where you're signed in": stable, and it gives away nothing about the token. */
+    private static function session_public_id(string $tokenHash): string
+    {
+        return substr(hash('sha256', 'sid:' . $tokenHash), 0, 16);
+    }
+
+    /** Sessions of the signed-in person that still work, this one first, then most recently used. */
+    public static function list_sessions(Conn $db, Session $s): array
+    {
+        $rows = $s->userId === null
+            ? $db->all('SELECT token_hash, device, created_at, last_seen_at FROM sessions WHERE token_hash = ?', [$s->tokenHash])
+            : $db->all('SELECT token_hash, device, created_at, last_seen_at FROM sessions
+                WHERE user_id = ? AND expires_at >= ? AND last_seen_at >= ? ORDER BY last_seen_at DESC',
+                [$s->userId, self::now(), self::now(-self::SESSION_IDLE_HOURS * 3600)]);
+        // Sessions from before devices were recorded: the one asking can still be named from its own request.
+        $here = self::device_label($_SERVER['HTTP_USER_AGENT'] ?? null);
+        $out = array_map(fn(array $r) => [
+            'id' => self::session_public_id($r['token_hash']),
+            'device' => $r['device'] ?: ($r['token_hash'] === $s->tokenHash ? $here : 'Unknown device'),
+            'created_at' => $r['created_at'], 'last_seen_at' => $r['last_seen_at'], 'current' => $r['token_hash'] === $s->tokenHash,
+        ], $rows);
+        usort($out, fn(array $a, array $b) => $b['current'] <=> $a['current']);  // stable: the rest keep their order
+        return $out;
+    }
+
+    /** Signs out one other session of the same person. Returns false when the id isn't theirs (or is this session). */
+    public static function end_session_by_id(Conn $db, Session $s, string $publicId): bool
+    {
+        if ($s->userId === null) {
+            return false;
+        }
+        foreach ($db->all('SELECT token_hash FROM sessions WHERE user_id = ? AND token_hash <> ?', [$s->userId, $s->tokenHash]) as $r) {
+            if (hash_equals(self::session_public_id($r['token_hash']), $publicId)) {
+                return $db->exec('DELETE FROM sessions WHERE token_hash = ?', [$r['token_hash']]) > 0;
+            }
+        }
+        return false;
+    }
+
+    /** Signs out every session of this person except the one asking. Returns how many were ended. */
+    public static function end_other_sessions(Conn $db, Session $s): int
+    {
+        return $s->userId === null ? 0
+            : $db->exec('DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?', [$s->userId, $s->tokenHash]);
     }
 
     public static function change_password(Conn $db, int $uid, int $hid, string $old, string $new): void

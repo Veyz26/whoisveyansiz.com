@@ -163,7 +163,7 @@ final class Api
                         throw new ApiError(403, 'Your session expired. Refresh the page.');
                     }
                     if (!$o['setup'] && $sess->userId !== null && Config::get('require_passkey') && Passkeys::count($db, $sess->userId) === 0) {
-                        throw new ApiError(403, 'Add Face ID or Touch ID to your account first.');
+                        throw new ApiError(403, 'Add a passkey (Face ID, Touch ID or Windows Hello) to your account first.');
                     }
                     if ($o['owner'] && $sess->role !== 'owner') {
                         throw new ApiError(403, 'Only the household owner can do that');
@@ -377,6 +377,25 @@ final class Api
             return ['ok' => true];
         });
 
+        // "Where you're signed in": the person's own sessions, and signing out the ones they don't recognise.
+        $R('GET', '/api/sessions', fn(Ctx $c) => ['sessions' => Auth::list_sessions($c->db, $c->sess)]);
+
+        $R('DELETE', '/api/sessions/([0-9a-f]{16})', function (Ctx $c, string $id) {
+            if (!Auth::end_session_by_id($c->db, $c->sess, $id)) {
+                throw new ApiError(404, 'That session has already ended.');
+            }
+            $c->db->audit($c->hid(), $c->uid(), 'session.ended');
+            return ['ok' => true];
+        });
+
+        $R('POST', '/api/auth/logout-others', function (Ctx $c) {
+            $n = Auth::end_other_sessions($c->db, $c->sess);
+            if ($n) {
+                $c->db->audit($c->hid(), $c->uid(), 'session.ended_others', (string)$n);
+            }
+            return ['ok' => true, 'ended' => $n];
+        });
+
         $R('POST', '/api/auth/password', function (Ctx $c) {
             if (!$c->uid()) {
                 throw new ApiError(400, 'Not available in the demo');
@@ -462,7 +481,7 @@ final class Api
 
         $R('DELETE', '/api/passkeys/(\d+)', function (Ctx $c, string $id) {
             if (Config::get('require_passkey') && Passkeys::count($c->db, $c->uid()) <= 1) {
-                throw new ApiError(400, 'Add Face ID on another device before removing your last passkey.');
+                throw new ApiError(400, 'Add a passkey on another device before removing your last one.');
             }
             Passkeys::delete($c->db, $c->uid(), (int)$id);
             $c->db->audit($c->hid(), $c->uid(), 'passkey.removed', $id);

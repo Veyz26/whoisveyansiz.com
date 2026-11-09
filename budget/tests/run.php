@@ -6,7 +6,7 @@
  */
 declare(strict_types=1);
 
-use Linen\{Auth, AuthError, Billing, Budget, Config, Db, Export, Microsoft, NeedsRecoveryCode, Passkeys, PasskeyError, Privacy, Statements};
+use Linen\{Auth, AuthError, Billing, Budget, Config, Db, Export, Microsoft, NeedsRecoveryCode, Passkeys, PasskeyError, Privacy, Session, Statements};
 
 require __DIR__ . '/FakeAuthenticator.php';
 require __DIR__ . '/FakePdf.php';
@@ -83,6 +83,33 @@ $tok = Auth::start_session($db, $v);
 check($db->val('SELECT COUNT(*) FROM sessions WHERE token_hash = ?', [$tok]) === 0, 'raw session token is never stored');
 check(!str_contains((string)$db->val('SELECT password_hash FROM users WHERE id = ?', [$v]), PW), 'password is hashed');
 check(Auth::login($db, 'VEYZ@example.test', PW) === $v, 'login is case-insensitive on email');
+// "Where you're signed in": each person sees and ends only their own sessions
+$uas = [
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1' => 'iPhone · Safari',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148' => 'iPhone · Home Screen app',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36' => 'Mac · Chrome',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0' => 'Windows PC · Edge',
+    'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36' => 'Android phone · Chrome',
+    '' => 'Unknown device',
+];
+foreach ($uas as $ua => $want) {
+    check(Auth::device_label($ua) === $want, 'device label: ' . $want, Auth::device_label($ua));
+}
+$mine = Auth::get_session($db, $tok);
+$phone = Auth::start_session($db, $v, null, array_key_first($uas));
+$herTok = Auth::start_session($db, $t);  // she's off the allowlist by now, so build her session by hand
+$hers = new Session($t, $hid, 'partner', 'csrf', 'Tiara', 'tiara@example.test', false, Auth::token_hash($herTok));
+$list = Auth::list_sessions($db, $mine);
+check(count($list) === 2 && $list[0]['current'] && !$list[1]['current'] && $list[1]['device'] === 'iPhone · Safari',
+    'sessions list shows this device first, then the others by name');
+check(!str_contains(json_encode($list), Auth::token_hash($phone)) && !str_contains(json_encode($list), $phone), 'sessions list never exposes tokens');
+check(!Auth::end_session_by_id($db, $hers, $list[1]['id']) && Auth::get_session($db, $phone) !== null, "one person can't end another's session");
+check(!Auth::end_session_by_id($db, $mine, $list[0]['id']), 'the current session is not ended from the list');
+check(Auth::end_session_by_id($db, $mine, $list[1]['id']) && Auth::get_session($db, $phone) === null, 'a session can be signed out from another device');
+Auth::start_session($db, $v);
+Auth::start_session($db, $v);
+check(Auth::end_other_sessions($db, $mine) === 2 && count(Auth::list_sessions($db, $mine)) === 1 && Auth::get_session($db, $tok) !== null
+    && (int)$db->val('SELECT COUNT(*) FROM sessions WHERE token_hash = ?', [$hers->tokenHash]) === 1, 'signing out other devices keeps this one, and leaves other people alone');
 for ($i = 0; $i < Auth::MAX_FAILED; $i++) {
     try {
         Auth::login($db, 'veyz@example.test', 'wrong password!!');
@@ -488,7 +515,7 @@ unset($old, $pdo);
 Config::set(['db_path' => $file, 'private_mode' => false, 'env' => 'development']);
 $db = Db::connect();
 $t = fn(int $id) => $db->one('SELECT * FROM transactions WHERE id = ?', [$id]);
-check((int)$db->val('PRAGMA user_version') === 5 && $db->one('SELECT period_from, period_to FROM imports')
+check((int)$db->val('PRAGMA user_version') === Db::SCHEMA_VERSION && $db->one('SELECT period_from, period_to FROM imports')
     === ['period_from' => '2027-03-02', 'period_to' => '2027-03-31'], 'v4 -> v5: schema upgraded, statement periods filled in from the rows');
 check($t($tFee)['description'] === 'FNB monthly account fee' && $t($tSmall)['description'] === 'FNB transaction fee', 'v4 -> v5: FNB fee rows renamed like new imports');
 check($t($tApple)['category'] === 'Entertainment' && $db->val('SELECT match FROM rules WHERE id = ?', [$userRule]) === 'regex',
