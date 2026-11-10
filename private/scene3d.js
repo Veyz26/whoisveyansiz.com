@@ -185,7 +185,7 @@ function jarProfile(h) {
   return pts;
 }
 
-export function mountJars(host, people, { format, onTip }) {
+export function mountJars(host, people, { format, onTip, onPick }) {
   const reduce = reducedMotion();
   const jars = [];
   const meshes = [];        // layers, for hover hit-testing
@@ -259,7 +259,7 @@ export function mountJars(host, people, { format, onTip }) {
       if (lh <= 0.02) break;
       const geo = new THREE.CylinderGeometry(R - WALL, R - WALL, Math.max(0.01, lh - GAP), 64);
       const mesh = new THREE.Mesh(geo, layerMats[def.key]);
-      mesh.userData = { person: p.name, layer: def.key, cents, share: Math.round((cents / Math.max(1, p.money_in_cents)) * 100) };
+      mesh.userData = { id: p.id, person: p.name, layer: def.key, cents, share: Math.round((cents / Math.max(1, p.money_in_cents)) * 100) };
       jar.add(mesh);
       meshes.push(mesh);
       layers.push({ mesh, y0: y, h: lh });
@@ -317,7 +317,7 @@ export function mountJars(host, people, { format, onTip }) {
     }
   }
 
-  // Hover or tap a layer for its amount.
+  // Hover a layer for its amount; tap it (without dragging) to see the items behind it.
   const ray = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
   const canvas = st.renderer.domElement;
@@ -327,6 +327,7 @@ export function mountJars(host, people, { format, onTip }) {
     ray.setFromCamera(ndc, camera);
     const hit = ray.intersectObjects(meshes, false)[0];
     onTip(hit ? hit.object.userData : null, e.clientX - r.left, e.clientY - r.top);
+    return hit?.object.userData || null;
   };
   const down = (e) => { dragging = { x: e.clientX, start: dragYaw, moved: false }; };
   const move = (e) => {
@@ -339,7 +340,10 @@ export function mountJars(host, people, { format, onTip }) {
     if (e.pointerType === "mouse") pick(e);
   };
   const up = (e) => {
-    if (dragging && !dragging.moved) pick(e);
+    if (dragging && !dragging.moved) {
+      const d = pick(e);
+      if (d && onPick) onPick(d);
+    }
     dragging = null;
     st.kick();
   };

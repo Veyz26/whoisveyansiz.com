@@ -414,10 +414,17 @@ final class Budget
             explode(' ', $merchant))) ?: 'Payment';
     }
 
-    public static function delete_line(Conn $db, int $hid, int $id): void
+    /** Deletes the item and returns an undo token (the toast's "Undo" puts it back with its history). */
+    public static function delete_line(Conn $db, int $hid, int $id): string
     {
-        self::line($db, $hid, $id);
-        $db->exec('DELETE FROM budget_lines WHERE id = ?', [$id]);
+        $line = self::line($db, $hid, $id);
+        return $db->tx(function (Conn $db) use ($hid, $id, $line) {
+            $token = Undo::stash($db, $hid, 'line', ['line' => $line,
+                'amounts' => $db->all('SELECT * FROM budget_amounts WHERE line_id = ?', [$id]),
+                'status' => $db->all('SELECT * FROM line_status WHERE line_id = ?', [$id])]);
+            $db->exec('DELETE FROM budget_lines WHERE id = ?', [$id]);
+            return $token;
+        });
     }
 
     public static function amount_on(Conn $db, int $lineId, string $month): ?int

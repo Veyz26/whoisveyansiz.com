@@ -12,7 +12,7 @@ use PDO;
 
 final class Db
 {
-    public const SCHEMA_VERSION = 6;
+    public const SCHEMA_VERSION = 7;
 
     /** Schema changes after the first release, applied in order to existing databases. */
     public const MIGRATIONS = [
@@ -59,6 +59,17 @@ ALTER TABLE budget_lines ADD COLUMN draft_key TEXT;
 SQL,
         6 => <<<'SQL'
 ALTER TABLE sessions ADD COLUMN device TEXT;
+SQL,
+        // Snapshots taken just before small deletes and category changes, so the toast's "Undo" can put them back.
+        7 => <<<'SQL'
+CREATE TABLE IF NOT EXISTS undo_items (
+    id              INTEGER PRIMARY KEY,
+    household_id    INTEGER NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+    token           TEXT NOT NULL UNIQUE,
+    kind            TEXT NOT NULL,
+    payload         TEXT NOT NULL,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
 SQL,
     ];
 
