@@ -12,7 +12,7 @@ use PDO;
 
 final class Db
 {
-    public const SCHEMA_VERSION = 5;
+    public const SCHEMA_VERSION = 6;
 
     /** Schema changes after the first release, applied in order to existing databases. */
     public const MIGRATIONS = [
@@ -56,6 +56,9 @@ UPDATE imports SET period_from = (SELECT MIN(posted_on) FROM transactions t WHER
                    period_to = (SELECT MAX(posted_on) FROM transactions t WHERE t.import_id = imports.id);
 ALTER TABLE budget_lines ADD COLUMN source TEXT;
 ALTER TABLE budget_lines ADD COLUMN draft_key TEXT;
+SQL,
+        6 => <<<'SQL'
+ALTER TABLE sessions ADD COLUMN device TEXT;
 SQL,
     ];
 
