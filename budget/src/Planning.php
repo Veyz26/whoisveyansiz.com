@@ -200,9 +200,19 @@ final class Goals
         return $id;
     }
 
-    public static function delete(Conn $db, int $hid, int $id): void
+    /** Deletes the goal and returns an undo token; linked budget items are re-linked on undo. */
+    public static function delete(Conn $db, int $hid, int $id): string
     {
-        $db->exec('DELETE FROM goals WHERE id = ? AND household_id = ?', [$id, $hid]);
+        $goal = $db->one('SELECT * FROM goals WHERE id = ? AND household_id = ?', [$id, $hid]);
+        if (!$goal) {
+            throw new NotFound('Goal not found');
+        }
+        return $db->tx(function (Conn $db) use ($hid, $id, $goal) {
+            $token = Undo::stash($db, $hid, 'goal', ['goal' => $goal,
+                'line_ids' => array_map('intval', array_column($db->all('SELECT id FROM budget_lines WHERE goal_id = ?', [$id]), 'id'))]);
+            $db->exec('DELETE FROM goals WHERE id = ?', [$id]);
+            return $token;
+        });
     }
 
     private static function cut_candidates(array $view): array

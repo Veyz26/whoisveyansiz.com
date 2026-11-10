@@ -49,15 +49,28 @@ async function download(path) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
-function toast(msg, kind = "ok") {
+// A message at the bottom; with an action ("Undo") it stays long enough to tap it.
+function toast(msg, kind = "ok", { action, onAction } = {}) {
   $$(".toast").forEach((t) => t.remove());
-  const t = Object.assign(document.createElement("div"), { className: `toast ${kind}`, innerHTML: `${icon(kind === "err" ? "alert" : "check")}<span></span>` });
+  const t = Object.assign(document.createElement("div"), { className: `toast ${kind}`,
+    innerHTML: `${icon(kind === "err" ? "alert" : "check")}<span></span>${action ? `<button type="button" class="toast-act"></button>` : ""}` });
   t.setAttribute("role", kind === "err" ? "alert" : "status");
-  t.lastChild.textContent = msg;
+  $("span", t).textContent = msg;
+  if (action) {
+    const b = $("button", t);
+    b.textContent = action;
+    b.onclick = async () => { b.disabled = true; try { await onAction(); } finally { t.remove(); } };
+  }
   document.body.appendChild(t);
-  setTimeout(() => t.remove(), kind === "err" ? 5200 : 3200);
+  setTimeout(() => t.remove(), action ? 8000 : kind === "err" ? 5200 : 3200);
 }
 function fail(e) { toast(e.message || String(e), "err"); }
+// Small deletes and category choices happen at once; the toast's "Undo" puts them back.
+function undoable(msg, token, after = route) {
+  toast(msg, "ok", { action: "Undo", onAction: async () => {
+    try { await api("api/undo", { method: "POST", body: { token } }); toast("Put back"); await after(); } catch (e) { fail(e); }
+  } });
+}
 
 // Shows a spinner on a button while its request runs, and stops double taps.
 async function busy(btn, work) {
@@ -175,7 +188,10 @@ function drawer(html, onMount) {
   onMount?.(box);
   return box;
 }
-function closeOverlays() { $$(".scrim:not(.ask-scrim), .modal:not(.ask), .drawer, .menu").forEach((e) => e.remove()); }
+function closeOverlays() {
+  $$(".scrim:not(.ask-scrim), .modal:not(.ask), .drawer, .menu").forEach((e) => e.remove());
+  const after = S.onClose; S.onClose = null; after?.();
+}
 addEventListener("keydown", (e) => { if (e.key === "Escape") closeOverlays(); });
 
 // An in-app "are you sure?": resolves true or false. It sits above an open drawer or modal and leaves it
@@ -810,10 +826,10 @@ async function pageOverview(el) {
   const out = single ? v.people[0].money_out_cents : hh.expense_cents + hh.saving_cents;
   const left = hh.surplus_cents;
   const pr = v.progress;
-  el.innerHTML = `${billingBanner()}
+  el.innerHTML = `${billingBanner()}${reviewBanner()}
     <div class="kpis">
-      <div class="card kpi"><div class="label">Money in</div><div class="value">${zar(moneyIn)}</div><div class="sub">${single ? "Salary and transfers received" : "All salaries and income"}</div></div>
-      <div class="card kpi"><div class="label">Going out</div><div class="value">${zar(out)}</div>
+      <div class="card kpi drill" role="button" tabindex="0" data-drill="kpi:in"><div class="label">Money in</div><div class="value">${zar(moneyIn)}</div><div class="sub">${single ? "Salary and transfers received" : "All salaries and income"}</div></div>
+      <div class="card kpi drill" role="button" tabindex="0" data-drill="kpi:out"><div class="label">Going out</div><div class="value">${zar(out)}</div>
         <div class="meter" style="margin:8px 0 6px" title="Paid so far"><i style="width:${pct(pr.paid_cents, pr.total_cents)}%"></i></div>
         <div class="sub">${zar(pr.paid_cents)} paid · ${pr.paid} of ${pr.total} items</div></div>
       <div class="card kpi"><div class="label">Left over</div><div class="value ${left < 0 ? "warn" : ""}">${zar(left)}</div>
@@ -829,9 +845,9 @@ async function pageOverview(el) {
     <div class="grid g2">
       <div class="card"><div class="card-head"><h3>Insights</h3><a class="small" href="#/forecast">Next month →</a></div>
         <div class="insights">${insightList(f.insights.slice(0, 5))}</div></div>
-      <div class="card"><div class="card-head"><h3>Where it goes</h3><span class="small muted">planned this month</span></div>
+      <div class="card"><div class="card-head"><h3>Where it goes</h3><span class="small muted">tap a bar for the items</span></div>
         ${groupMeters(v.by_group, moneyIn)}
-        <div class="bars" style="margin-top:18px">${v.by_category.slice(0, 7).map((c) => barRow(c.category, c.planned_cents, v.by_category[0].planned_cents)).join("")}</div></div>
+        <div class="bars" style="margin-top:18px">${v.by_category.slice(0, 7).map((c) => barRow(c.category, c.planned_cents, v.by_category[0].planned_cents, null, "planned", `cat:${c.category}`)).join("")}</div></div>
       <div class="card"><div class="card-head"><h3>Goals</h3><a class="small" href="#/goals">All goals →</a></div>
         ${g.length ? `<div class="bars">${g.map((x) => `<div><div class="row" style="justify-content:space-between;margin-bottom:6px"><span>${esc(x.goal.name)}</span>
           <span class="small muted">${zar(x.goal.saved_cents)} of ${zar(x.goal.target_cents)}</span></div>
@@ -843,7 +859,62 @@ async function pageOverview(el) {
           <td class="num">${zar(l.amount_cents)}</td></tr>`).join("")}</tbody></table>` : `<p class="muted">Nothing changed from last month.</p>`}</div>
     </div>`;
   bindBarTips(el);
-  mountJars(v);
+  bindReview(el);
+  // Tap a figure, a bar or a jar layer to see exactly what's behind it.
+  bindDrill(el, (key) => {
+    const [kind, ...rest] = key.split(":");
+    const arg = rest.join(":");
+    if (kind === "kpi" && arg === "in") return linesDrawer("Money in", v.lines.filter((l) => l.kind === "income"), v);
+    if (kind === "kpi") return linesDrawer("Going out", v.lines.filter((l) => l.kind !== "income" && (single || l.kind !== "transfer")), v);
+    if (kind === "cat") return linesDrawer(arg, v.lines.filter((l) => l.kind !== "income" && l.kind !== "transfer" && l.category === arg), v, { month: S.month, actuals: hasActuals });
+    if (kind === "group") return linesDrawer(arg, v.lines.filter((l) => lineGroup(l) === arg), v);
+    if (kind === "flow") return txnDrawer({ in: "Came in", spent: "Spent", moved: "Moved between your own accounts" }[arg], { month: S.month, flow: arg });
+    if (kind === "jar") { const [id, layer] = arg.split("/"); const p = v.people.find((x) => x.id === +id); return linesDrawer(`${p?.name}: ${layer}`, v.lines.filter((l) => l.member_id === +id && lineGroup(l) === layer), v); }
+  });
+  mountJars(v, (d) => linesDrawer(`${d.person}: ${d.layer}`, v.lines.filter((l) => l.member_id === d.id && lineGroup(l) === d.layer), v));
+}
+
+// Which jar an item belongs in: the same split the 3D jars and "Where it goes" use.
+function lineGroup(l) {
+  if (l.kind === "transfer") return "Transfers";
+  if (l.kind === "income") return null;
+  return l.group === "Essentials" || l.group === "Lifestyle" || l.group === "Savings" ? l.group : l.kind === "saving" ? "Savings" : "Lifestyle";
+}
+
+// The budget items behind a figure. Tap one to open it; for a category with statements, the actual transactions are a tap away too.
+function linesDrawer(title, lines, view, { month = S.month, actuals = false } = {}) {
+  const total = lines.reduce((s, l) => s + l.amount_cents, 0);
+  const box = drawer(`<div class="up-head"><h2>${esc(title)}</h2><button type="button" class="btn ghost sm" data-close>Close</button></div>
+    <div class="dd-total"><b>${zar(total)}</b><span class="small muted">${lines.length} item${lines.length === 1 ? "" : "s"} planned · ${esc(monthName(month))}</span></div>
+    ${lines.length ? `<div class="dd-list">${lines.map((l) => `<button type="button" class="dd-row" data-id="${l.id}"><span class="dot ${pclass(l.member_id)}"></span>
+      <span class="nm">${esc(l.name)}<small>${esc(l.member_name)}${l.to_member_name ? ` → ${esc(l.to_member_name)}` : l.category && l.category !== title ? ` · ${esc(l.category)}` : ""}${l.paid ? " · paid" : ""}</small></span>
+      <b>${zar(l.amount_cents)}</b></button>`).join("")}</div>` : `<p class="muted">Nothing planned here this month.</p>`}
+    ${actuals ? `<button type="button" class="btn sm dd-more" id="dd-actual">What actually went out on ${esc(title)} →</button>` : ""}`);
+  $$(".dd-row", box).forEach((b) => (b.onclick = () => openLine(+b.dataset.id, view)));
+  $("#dd-actual", box)?.addEventListener("click", () => txnDrawer(title, { month, flow: "spent", category: title }));
+}
+
+// The transactions a figure was summed from: the same filter the server used for the card, so the totals match.
+async function txnDrawer(title, { month, flow, category }) {
+  const box = drawer(`<div class="up-head"><h2>${esc(title)}</h2><button type="button" class="btn ghost sm" data-close>Close</button></div><div id="dd">${skeleton(1)}</div>`);
+  try {
+    const rows = await api(`api/transactions?month=${month}&flow=${flow}${category ? `&category=${encodeURIComponent(category)}` : ""}${memberQ()}`);
+    const total = rows.reduce((s, t) => s + t.amount_cents, 0);
+    $("#dd", box).innerHTML = `<div class="dd-total"><b>${zar(flow === "in" ? total : flow === "moved" ? Math.abs(total) : -total)}</b>
+        <span class="small muted">${rows.length} transaction${rows.length === 1 ? "" : "s"} · ${esc(monthName(month))}</span></div>
+      ${rows.length ? `<table class="t dd-t"><tbody>${rows.map((t) => `<tr><td class="small muted">${t.posted_on.slice(5)}</td>
+        <td>${esc(t.description)}<div class="small muted">${esc(t.account)}${category ? "" : ` · ${esc(t.category)}`}</div></td>
+        <td class="num ${t.amount_cents > 0 ? "good" : ""}">${zar(t.amount_cents, { whole: false })}</td></tr>`).join("")}</tbody></table>` : `<p class="muted">No transactions.</p>`}
+      <p class="small" style="margin-top:14px"><a href="#/statements?tab=transactions&m=${month}" data-close>Open the transactions tab →</a></p>`;
+    $$("[data-close]", box).forEach((b) => (b.onclick = closeOverlays));
+  } catch (e) { fail(e); }
+}
+
+function bindDrill(el, fn) {
+  $$("[data-drill]", el).forEach((r) => {
+    r.addEventListener("click", () => fn(r.dataset.drill, r));
+    r.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fn(r.dataset.drill, r); } });
+  });
 }
 
 // What the statements show for the month, next to the plan. Came in − spent − moved = left over, which is how much
@@ -854,9 +925,9 @@ function actualsCard(a) {
   return `<div class="card actuals">
     <div class="card-head"><h3>From your statements</h3><a class="small" href="#/statements?tab=transactions&m=${S.month}">See transactions</a></div>
     <div class="actuals-row">
-      <div><span>Came in</span><b>${zar(s.income_cents)}</b></div>
-      <div><span>Spent</span><b>${zar(s.spend_cents)}</b></div>
-      <div><span>${moved[0]}</span><b>${zar(moved[1])}</b></div>
+      <div class="drill" role="button" tabindex="0" data-drill="flow:in"><span>Came in</span><b>${zar(s.income_cents)}</b></div>
+      <div class="drill" role="button" tabindex="0" data-drill="flow:spent"><span>Spent</span><b>${zar(s.spend_cents)}</b></div>
+      <div class="drill" role="button" tabindex="0" data-drill="flow:moved"><span>${moved[0]}</span><b>${zar(moved[1])}</b></div>
       <div><span>Left over</span><b class="${s.net_cents < 0 ? "warn" : ""}">${zar(s.net_cents)}</b></div>
     </div>
     <p class="small muted">From ${a.accounts.map(esc).join(", ")}.${a.missing.length ? ` No statements yet from ${a.missing.map(esc).join(" or ")}.` : ""}
@@ -920,12 +991,12 @@ function jarsCard(v) {
   return `<div class="card jars-card" id="jars-card">
     <div class="card-head"><h3>${people.length > 1 ? "Your jars" : "Your jar"}</h3><span class="small muted">Jar height is money in · drag to turn</span></div>
     <div class="jars3d" id="jars3d" role="img" aria-label="${esc(summary)}"><div class="fx-tip hidden" id="jars-tip"></div></div>
-    <div class="legend jars-legend">${JAR_KEYS.filter((k) => totals[k]).map((k) => `<span><span class="sw jar-${k.toLowerCase()}"></span>${k} <b>${zar(totals[k])}</b></span>`).join("")}
+    <div class="legend jars-legend">${JAR_KEYS.filter((k) => totals[k]).map((k) => `<button type="button" class="legend-btn" data-drill="group:${k}"><span class="sw jar-${k.toLowerCase()}"></span>${k} <b>${zar(totals[k])}</b></button>`).join("")}
       <span><span class="sw jar-left"></span>Clear glass: left over</span></div>
   </div>`;
 }
 
-async function mountJars(v) {
+async function mountJars(v, onPick) {
   const host = $("#jars3d");
   if (!host) return;
   try {
@@ -942,6 +1013,7 @@ async function mountJars(v) {
         tip.style.transform = `translate(${Math.min(x + 14, host.clientWidth - 200)}px, ${Math.max(0, y - 54)}px)`;
         tip.classList.remove("hidden");
       },
+      onPick,
     });
   } catch {
     $("#jars-card")?.remove();   // no 3D (old browser, blocked WebGL): the cards below still show everything
@@ -977,13 +1049,13 @@ function groupMeters(g, income) {
   return `<div class="legend"><span><span class="sw" style="background:var(--accent)"></span>Share of income</span><span><span class="tk"></span>50 / 30 / 20 guide</span></div>
   <div class="bars">${Object.entries(guide).map(([k, target]) => {
     const p = pct(g[k] || 0, income);
-    return `<div class="bar-row" data-tip="${esc(k)}: ${zar(g[k] || 0)} (${p}% of income, guide ${target}%)"><span>${k}</span>
+    return `<div class="bar-row drill" role="button" tabindex="0" data-drill="group:${k}" data-tip="${esc(k)}: ${zar(g[k] || 0)} (${p}% of income, guide ${target}%)"><span>${k}</span>
       <div class="track"><div class="fill" style="width:${Math.min(100, p)}%"></div><div class="tick" style="left:calc(${target}% - 1px)"></div></div>
       <span class="num">${p}%</span></div>`;
   }).join("")}</div>`;
 }
-function barRow(label, value, max, tick, tickLabel = "planned") {
-  return `<div class="bar-row" data-tip="${esc(label)}: ${zar(value)}${tick != null ? ` · ${tickLabel} ${zar(tick)}` : ""}"><span>${esc(label)}</span>
+function barRow(label, value, max, tick, tickLabel = "planned", drill = null) {
+  return `<div class="bar-row ${drill ? `drill" role="button" tabindex="0" data-drill="${esc(drill)}` : ""}" data-tip="${esc(label)}: ${zar(value)}${tick != null ? ` · ${tickLabel} ${zar(tick)}` : ""}"><span>${esc(label)}</span>
     <div class="track"><div class="fill" style="width:${Math.max(1, (100 * value) / Math.max(max, 1))}%"></div>
     ${tick ? `<div class="tick" style="left:calc(${Math.min(100, (100 * tick) / Math.max(max, 1))}% - 1px)"></div>` : ""}</div>
     <span class="num">${zar(value)}</span></div>`;
@@ -1032,8 +1104,12 @@ async function pageBudget(el) {
   $$(".item input[type=checkbox]", el).forEach((cb) => {
     cb.onclick = (e) => e.stopPropagation();
     cb.onchange = async () => {
-      try { await api(`api/budget/lines/${cb.dataset.id}/paid`, { method: "POST", body: { month: S.month, paid: cb.checked } }); cb.closest(".item").classList.toggle("paid", cb.checked); }
-      catch (e) { cb.checked = !cb.checked; fail(e); }
+      const paid = cb.checked;
+      const set = async (p) => { await api(`api/budget/lines/${cb.dataset.id}/paid`, { method: "POST", body: { month: S.month, paid: p } }); cb.checked = p; cb.closest(".item").classList.toggle("paid", p); };
+      try {
+        await set(paid);
+        toast(paid ? "Ticked as paid" : "Ticked as not paid", "ok", { action: "Undo", onAction: () => set(!paid).catch(fail) });
+      } catch (e) { cb.checked = !paid; fail(e); }
     };
   });
   $$(".item[data-id]", el).forEach((row) => (row.onclick = () => openLine(+row.dataset.id, v)));
@@ -1136,8 +1212,7 @@ async function openLine(id, view) {
   $("[name=kind]", box).onchange = (e) => $("#to-row", box).classList.toggle("hidden", e.target.value !== "transfer");
   $("#chg", box).onclick = () => amountModal(l);
   $("#del", box).onclick = async () => {
-    if (!(await ask(`Delete \u201c${l.name}\u201d?`, { body: "Its history is removed from every month. This can't be undone.", yes: "Delete", danger: true }))) return;
-    try { await api(`api/budget/lines/${id}`, { method: "DELETE" }); closeOverlays(); toast("Deleted"); route(); } catch (e) { fail(e); }
+    try { const r = await api(`api/budget/lines/${id}`, { method: "DELETE" }); closeOverlays(); undoable(`Deleted \u201c${l.name}\u201d`, r.undo); route(); } catch (e) { fail(e); }
   };
   $("#f", box).onsubmit = async (e) => {
     e.preventDefault();
@@ -1344,7 +1419,9 @@ function goalModal(g) {
       <label class="field">Whose goal <select name="who"><option value="">Shared</option>${memberOptions(g?.member_id)}</select></label></div>
     <div class="actions">${g ? `<button type="button" class="btn danger" id="del" style="margin-right:auto">Delete</button>` : ""}<button type="button" class="btn" data-close>Cancel</button><button class="btn primary">Save</button></div></form>`);
   if (g && !g.member_id) $("[name=who]", box).value = "";
-  $("#del", box)?.addEventListener("click", async () => { if (!(await ask("Delete this goal?", { body: "Budget items linked to it stay in your budget.", yes: "Delete", danger: true }))) return; await api(`api/goals/${g.id}`, { method: "DELETE" }).catch(fail); closeOverlays(); route(); });
+  $("#del", box)?.addEventListener("click", async () => {
+    try { const r = await api(`api/goals/${g.id}`, { method: "DELETE" }); closeOverlays(); undoable(`Deleted \u201c${g.name}\u201d`, r.undo); route(); } catch (e) { fail(e); }
+  });
   $("#f", box).onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -1379,11 +1456,11 @@ async function pageStatements(el, q) {
     const max = Math.max(1, ...rows.map((r) => Math.max(r.p, r.a)));
     const plannedOut = plan.household.expense_cents;
     box.innerHTML = `<div class="row" style="margin-bottom:14px">${picker}<span class="small muted">From imported statements</span></div>
-      <div class="kpis"><div class="card kpi"><div class="label">Actually spent</div><div class="value">${zar(a.summary.spend_cents)}</div><div class="sub">excluding transfers and savings</div></div>
+      <div class="kpis"><div class="card kpi drill" role="button" tabindex="0" data-drill="flow:spent"><div class="label">Actually spent</div><div class="value">${zar(a.summary.spend_cents)}</div><div class="sub">excluding transfers and savings · tap to see</div></div>
         <div class="card kpi"><div class="label">Planned</div><div class="value">${zar(plannedOut)}</div><div class="sub">expenses in your budget</div></div>
         <div class="card kpi"><div class="label">Difference</div><div class="value ${a.summary.spend_cents > plannedOut ? "warn" : "good"}">${zar(a.summary.spend_cents - plannedOut, { signed: true })}</div><div class="sub">${a.summary.uncategorised} transaction(s) in Other</div></div></div>
       <div class="grid g2"><div class="card"><h3>By category</h3><div class="legend"><span><span class="sw" style="background:var(--accent)"></span>Actual</span><span><span class="tk"></span>Planned</span></div>
-        <div class="bars">${rows.map((r) => barRow(r.c, r.a, max, r.p)).join("")}</div></div>
+        <div class="bars">${rows.map((r) => barRow(r.c, r.a, max, r.p, "planned", `cat:${r.c}`)).join("")}</div></div>
         <div class="card"><h3>Suggested actions</h3><div class="insights">${a.advice.actions.length ? a.advice.actions.map((x) => `<div class="insight info"><span class="ic">→</span><span class="t">${esc(x.title)}</span><span class="amt good">${x.monthly_impact_cents ? "~" + zar(x.monthly_impact_cents) + "/mo" : ""}</span><span class="d">${esc(x.detail)}</span></div>`).join("") : `<p class="muted">Nothing stands out.</p>`}</div></div></div>`;
   } else if (tab === "transactions") {
     await transactionsTab(box, sm, picker);
@@ -1398,26 +1475,86 @@ async function pageStatements(el, q) {
   }
   $("#sm")?.addEventListener("change", (e) => go(`#/statements?tab=${tab}&m=${e.target.value}`));
   bindBarTips(box);
+  bindDrill(box, (key) => {
+    const cat = key.startsWith("cat:") ? key.slice(4) : null;
+    txnDrawer(cat || "Actually spent", { month: sm, flow: "spent", category: cat });
+  });
 }
 
 async function transactionsTab(box, sm, picker) {
   const rows = await api(`api/transactions?month=${sm}${memberQ()}`);
   const unknown = rows.filter((t) => t.category_source === "none" && !t.is_transfer).length;
   box.innerHTML = `<div class="row" style="margin-bottom:14px">${picker}<label class="check"><input type="checkbox" id="rule" checked> Remember my choice for that merchant</label></div>
-    ${unknown ? `<div class="banner"><span>${unknown} transaction(s) need a category.${S.me.llm.available ? " AI can suggest them. Only merchant names are sent." : ""}</span>${S.me.llm.available ? `<button class="btn sm primary" id="ai">Suggest categories</button>` : ""}</div>` : ""}
+    ${unknown ? `<div class="banner"><span>${unknown} transaction${unknown === 1 ? "" : "s"} this month still need${unknown === 1 ? "s" : ""} a category.</span><button type="button" class="btn sm primary" id="rv-open">Sort them</button></div>` : ""}
     <div class="card" style="padding:6px 8px"><div class="table-wrap"><table class="t"><thead><tr><th>Date</th><th>Description</th><th class="num">Amount</th><th>Category</th></tr></thead><tbody>
     ${rows.map((t) => `<tr><td class="small muted">${t.posted_on}</td><td>${esc(t.description)}<div class="small muted">${esc(t.account)}</div></td>
       <td class="num ${t.amount_cents > 0 ? "good" : ""}">${zar(t.amount_cents, { whole: false })}</td>
       <td><select data-id="${t.id}" aria-label="Category">${S.me.categories.map((c) => `<option ${c === t.category ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></td></tr>`).join("")}
     </tbody></table></div></div>`;
   $$("select[data-id]", box).forEach((s) => (s.onchange = async () => {
-    try { const r = await api(`api/transactions/${s.dataset.id}/category`, { method: "POST", body: { category: s.value, make_rule: $("#rule").checked } }); toast(r.updated > 1 ? `Updated ${r.updated} transactions` : "Saved"); }
-    catch (e) { fail(e); }
+    try {
+      const r = await api(`api/transactions/${s.dataset.id}/category`, { method: "POST", body: { category: s.value, make_rule: $("#rule").checked } });
+      undoable(r.updated > 1 ? `Sorted ${r.updated} transactions as ${s.value}` : `Sorted as ${s.value}`, r.undo);
+    } catch (e) { fail(e); }
   }));
-  $("#ai")?.addEventListener("click", async (e) => {
-    e.target.disabled = true; e.target.textContent = "Asking…";
-    try { const r = await api("api/categorise/ai", { method: "POST", body: {} }); toast(`Categorised ${r.transactions_updated} transaction(s)`); route(); } catch (err) { fail(err); e.target.disabled = false; }
-  });
+  bindReview(box);
+}
+
+// ---------------------------------------------------------------- review inbox
+// What the app couldn't sort, one payee at a time. A choice sorts every transaction from that payee and is
+// remembered, so next month's statements come in already sorted.
+const reviewBanner = () => S.me.to_review > 0 ? `<div class="banner rv-banner"><span><b>${S.me.to_review}</b> transaction${S.me.to_review === 1 ? "" : "s"} from your statements ${S.me.to_review === 1 ? "needs" : "need"} sorting.</span>
+  <button type="button" class="btn sm primary" id="rv-open">Sort them</button></div>` : "";
+const bindReview = (el) => $("#rv-open", el)?.addEventListener("click", () => reviewInbox());
+
+async function reviewInbox() {
+  const skipped = new Set();
+  let done = 0, total = 0, busy = false;
+  const box = modal(`<div class="up-head"><h2>Sort transactions</h2><button type="button" class="btn ghost sm" data-close>Close</button></div>
+    <div class="meter good rv-meter"><i style="width:0"></i></div><div id="rv"></div>`);
+  S.onClose = () => { if (done) refreshMe().then(route); };
+  const host = $("#rv", box);
+  const show = async () => {
+    const q = await api("api/review");
+    const items = q.items.filter((i) => !skipped.has(i.id));
+    total = Math.max(total, done + items.length);
+    $(".rv-meter i", box).style.width = `${pct(done, total)}%`;
+    const i = items[0];
+    if (!i) {
+      host.innerHTML = `<div class="rv-done"><h3>${done ? "All sorted" : "Nothing to sort"}</h3>
+        <p class="muted">${done ? `${done} card${done === 1 ? "" : "s"} sorted. ${esc(APP)} will sort these payees itself next time.` : "Every transaction already has a category."}${skipped.size ? ` ${skipped.size} skipped for later.` : ""}</p>
+        <div class="row rv-foot"><a class="btn primary" href="#/statements?tab=spending" data-close>See spending</a><button type="button" class="btn" data-close>Done</button></div></div>`;
+      $$("[data-close]", host).forEach((b) => (b.onclick = closeOverlays));
+      return;
+    }
+    const incoming = i.amount_cents > 0;
+    const first = incoming ? ["Income", "Transfers", "Other"] : [];
+    const cats = [...first, ...S.me.categories.filter((c) => !first.includes(c) && (incoming || c !== "Income")), ...(incoming ? [] : ["Income"])];
+    host.innerHTML = `<div class="small muted rv-pos">${done + 1} of ${total}</div>
+      <div class="rv-card">
+        <div class="rv-amt ${incoming ? "good" : ""}">${zar(i.amount_cents, { whole: false })}</div>
+        <div class="rv-desc">${esc(i.description)}</div>
+        <div class="small muted">${i.posted_on} · ${esc(i.account)}${i.count > 1 ? ` · <b>+${i.count - 1} more</b> like this, ${zar(Math.abs(i.total_cents))} in all` : ""}</div>
+      </div>
+      <p class="small muted rv-hint">${i.remembers ? `What is this? ${esc(APP)} remembers your choice for this payee.` : "What is this? (This name is too vague to remember.)"}</p>
+      <div class="rv-cats">${cats.map((c) => `<button type="button" class="btn sm" data-cat="${esc(c)}">${esc(c)}</button>`).join("")}</div>
+      <div class="row rv-foot"><button type="button" class="btn ghost sm" id="rv-skip">Skip this one</button></div>`;
+    $("#rv-skip", host).onclick = () => { skipped.add(i.id); show(); };
+    $$("[data-cat]", host).forEach((b) => (b.onclick = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const r = await api(`api/transactions/${i.id}/category`, { method: "POST", body: { category: b.dataset.cat, make_rule: true } });
+        done++;
+        toast(r.updated > 1 ? `${r.updated} sorted as ${b.dataset.cat}` : `Sorted as ${b.dataset.cat}`, "ok", { action: "Undo", onAction: async () => {
+          try { await api("api/undo", { method: "POST", body: { token: r.undo } }); done = Math.max(0, done - 1); if (box.isConnected) show(); else { refreshMe().then(route); } } catch (e) { fail(e); }
+        } });
+        await show();
+      } catch (e) { fail(e); }
+      busy = false;
+    }));
+  };
+  try { await show(); } catch (e) { fail(e); closeOverlays(); }
 }
 
 const fileB64 = (file) => new Promise((res, rej) => {
@@ -1451,7 +1588,7 @@ const uploaderHtml = () => `
     <input type="file" id="up-files" multiple aria-label="Choose statements">
   </div>
   <ul class="up-list" id="up-list" aria-live="polite"></ul>
-  <div class="up-done hidden" id="up-done"><button type="button" class="btn primary" id="up-view">See transactions</button></div>`;
+  <div class="up-done hidden" id="up-done"><button type="button" class="btn primary hidden" id="up-sort"></button><button type="button" class="btn" id="up-view">See transactions</button></div>`;
 
 function monthSpan(a, b) {
   const [ma, mb] = [a.slice(0, 7), b.slice(0, 7)];
@@ -1499,6 +1636,10 @@ function uploader(box) {
         + (r.drafted ? `<div class="good">Budget drafted from your statements (${r.drafted} items).</div>` : "");
       $("#up-done", box).classList.remove("hidden");
       await refreshMe();
+      const sort = $("#up-sort", box);
+      sort.classList.toggle("hidden", !S.me.to_review);
+      sort.textContent = `Sort ${S.me.to_review} transaction${S.me.to_review === 1 ? "" : "s"}`;
+      $("#up-view", box).classList.toggle("primary", !S.me.to_review);
     } catch (err) {
       if (err.data?.needs_owner) return askOwner(item, err.data);
       status.className = "up-status small warn";
@@ -1526,6 +1667,7 @@ function uploader(box) {
   }
 
   $("#up-view", box).onclick = () => { closeOverlays(); go(`#/statements?tab=transactions${latest ? `&m=${latest.slice(0, 7)}` : ""}`); };
+  $("#up-sort", box).onclick = () => reviewInbox();
 }
 
 // ---------------------------------------------------------------- debts
@@ -1541,7 +1683,10 @@ async function pageDebts(el) {
         <input type="number" inputmode="decimal" name="min" step="0.01" min="0" placeholder="Minimum payment (R)" required>
         <button class="btn primary" style="justify-self:start">Add debt</button></form></div>
     <div class="card"><h3>Payoff plan</h3><label class="field" style="max-width:240px">Extra I can pay each month (R)<input type="number" inputmode="decimal" id="extra" min="0" step="100" value="1000"></label><div id="plan" style="margin-top:16px"></div></div></div>`;
-  $$("[data-del]", el).forEach((b) => (b.onclick = async () => { await api(`api/debts/${b.dataset.del}`, { method: "DELETE" }).catch(fail); route(); }));
+  $$("[data-del]", el).forEach((b) => (b.onclick = async () => {
+    const name = debts.find((d) => d.id === +b.dataset.del)?.name || "debt";
+    try { const r = await api(`api/debts/${b.dataset.del}`, { method: "DELETE" }); undoable(`Removed \u201c${name}\u201d`, r.undo); route(); } catch (e) { fail(e); }
+  }));
   $("#f", el).onsubmit = async (e) => {
     e.preventDefault(); const f = new FormData(e.target);
     try { await api("api/debts", { method: "POST", body: { name: f.get("name"), balance_cents: toCents(f.get("bal")), apr_bp: Math.round(+f.get("apr") * 100), min_payment_cents: toCents(f.get("min")) } }); route(); } catch (err) { fail(err); }

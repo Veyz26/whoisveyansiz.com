@@ -416,7 +416,7 @@ final class Api
                     'csrf' => $c->sess->csrf, 'billing' => ['status' => 'private', 'can_write' => false, 'plans' => new \stdClass()],
                     'consents' => new \stdClass(), 'categories' => [], 'groups' => new \stdClass(), 'this_month' => Money::this_month(),
                     'statement_months' => [], 'llm' => ['available' => false], 'private_mode' => (bool)Config::get('private_mode'),
-                    'passkeys' => ['count' => 0, 'recovery_left' => 0, 'required' => true], 'setup_only' => true];
+                    'passkeys' => ['count' => 0, 'recovery_left' => 0, 'required' => true], 'setup_only' => true, 'to_review' => 0];
             }
             $h = $c->db->one('SELECT id, name, retention_months, is_demo FROM households WHERE id = ?', [$c->hid()]);
             $h['is_demo'] = (bool)$h['is_demo'];
@@ -431,6 +431,7 @@ final class Api
                 'statement_months' => Analysis::months($c->db, new Scope($c->hid())),
                 'llm' => ['available' => false, 'installed' => false, 'reason' => 'AI categorisation is not available in this version.'],
                 'private_mode' => (bool)Config::get('private_mode'),
+                'to_review' => Categorise::to_review($c->db, $c->hid()),
                 'passkeys' => $c->uid() ? ['count' => Passkeys::count($c->db, $c->uid()), 'recovery_left' => Passkeys::recovery_left($c->db, $c->uid()),
                     'required' => (bool)Config::get('require_passkey')] : ['count' => 0, 'recovery_left' => 0, 'required' => false],
             ];
@@ -562,10 +563,11 @@ final class Api
             return ['ok' => true];
         }, write: true);
 
-        $R('DELETE', '/api/budget/lines/(\d+)', function (Ctx $c, string $id) {
-            Budget::delete_line($c->db, $c->hid(), (int)$id);
-            return ['ok' => true];
-        }, write: true);
+        $R('DELETE', '/api/budget/lines/(\d+)', fn(Ctx $c, string $id) =>
+            ['ok' => true, 'undo' => Budget::delete_line($c->db, $c->hid(), (int)$id)], write: true);
+
+        // Puts back what a small delete or a category choice changed (the toast's "Undo").
+        $R('POST', '/api/undo', fn(Ctx $c) => Undo::restore($c->db, $c->hid(), (string)($c->body['token'] ?? '')), write: true);
 
         // (Re)draft the budget from statements: replaces items drafted before, keeps everything people added or edited.
         $R('POST', '/api/budget/draft', function (Ctx $c) {
@@ -597,10 +599,7 @@ final class Api
         $R('GET', '/api/goals', fn(Ctx $c) => Goals::plan_all($c->db, $c->hid(), $c->month()));
         $R('POST', '/api/goals', fn(Ctx $c) => ['id' => Goals::save($c->db, $c->hid(), $c->body)], write: true);
         $R('PATCH', '/api/goals/(\d+)', fn(Ctx $c, string $id) => ['id' => Goals::save($c->db, $c->hid(), $c->body, (int)$id)], write: true);
-        $R('DELETE', '/api/goals/(\d+)', function (Ctx $c, string $id) {
-            Goals::delete($c->db, $c->hid(), (int)$id);
-            return ['ok' => true];
-        }, write: true);
+        $R('DELETE', '/api/goals/(\d+)', fn(Ctx $c, string $id) => ['ok' => true, 'undo' => Goals::delete($c->db, $c->hid(), (int)$id)], write: true);
 
         // --- statements ------------------------------------------------------------------
         $R('GET', '/api/transactions', function (Ctx $c) {
@@ -622,11 +621,18 @@ final class Api
             if ($c->arg('unknown')) {
                 $sql .= " AND t.category_source = 'none' AND t.is_transfer = 0";
             }
+            if ($c->arg('flow')) {
+                // Exactly the transactions a card's figure was summed from, so a tap on it shows what's behind it.
+                $sql .= ' AND ' . Analysis::flow_sql($c->arg('flow'));
+            }
             return $c->db->all($sql . ' ORDER BY t.posted_on DESC, t.id DESC LIMIT 1000', $p);
         });
 
         $R('POST', '/api/transactions/(\d+)/category', fn(Ctx $c, string $id) =>
-            Categorise::set_category($c->db, $c->hid(), (int)$id, (string)($c->body['category'] ?? ''), $c->bool('make_rule', true)), write: true);
+            Categorise::set_category_undoable($c->db, $c->hid(), (int)$id, (string)($c->body['category'] ?? ''), $c->bool('make_rule', true)), write: true);
+
+        // The review inbox: what the app couldn't sort, grouped by payee.
+        $R('GET', '/api/review', fn(Ctx $c) => Categorise::review_queue($c->db, $c->hid()));
 
         $R('POST', '/api/import', function (Ctx $c) {
             // PDFs are binary, so the browser sends them base64-encoded.
@@ -697,8 +703,15 @@ final class Api
                 [$c->hid(), $name, $bal, $apr, $min])];
         }, write: true);
         $R('DELETE', '/api/debts/(\d+)', function (Ctx $c, string $id) {
-            $c->db->exec('DELETE FROM debts WHERE id = ? AND household_id = ?', [(int)$id, $c->hid()]);
-            return ['ok' => true];
+            $debt = $c->db->one('SELECT * FROM debts WHERE id = ? AND household_id = ?', [(int)$id, $c->hid()]);
+            if (!$debt) {
+                throw new NotFound('Debt not found');
+            }
+            return $c->db->tx(function (Conn $db) use ($c, $debt) {
+                $token = Undo::stash($db, $c->hid(), 'debt', ['debt' => $debt]);
+                $db->exec('DELETE FROM debts WHERE id = ?', [$debt['id']]);
+                return ['ok' => true, 'undo' => $token];
+            });
         }, write: true);
         $R('GET', '/api/debts/plan', function (Ctx $c) {
             $x = $c->arg('extra_cents', '0');

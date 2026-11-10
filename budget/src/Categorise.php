@@ -177,6 +177,60 @@ final class Categorise
             return ['updated' => $affected, 'rule_created' => $makeRule];
         });
     }
+
+    /** set_category with a snapshot stashed first, so the toast's "Undo" can put every affected transaction (and the rule) back. */
+    public static function set_category_undoable(Conn $db, int $householdId, int $txnId, string $category, bool $makeRule = true): array
+    {
+        return $db->tx(function (Conn $db) use ($householdId, $txnId, $category, $makeRule) {
+            $txn = $db->one('SELECT * FROM transactions WHERE id = ? AND household_id = ?', [$txnId, $householdId]);
+            if (!$txn) {
+                throw new NotFound('Transaction not found');
+            }
+            $makeRule = $makeRule && self::specific_payee($txn['merchant']);
+            $dir = $txn['amount_cents'] > 0 ? 'in' : 'out';
+            $sign = $dir === 'in' ? '>' : '<';
+            $where = $makeRule ? "(t.id = ? OR (t.merchant = ? AND t.category_source != 'user' AND t.amount_cents $sign 0))" : 't.id = ?';
+            $txns = $db->all("SELECT t.id, t.category, t.category_source, t.rule_id, t.is_transfer FROM transactions t WHERE t.household_id = ? AND $where",
+                $makeRule ? [$householdId, $txnId, $txn['merchant']] : [$householdId, $txnId]);
+            $ruleSql = "SELECT id, category, priority, source FROM rules WHERE household_id = ? AND pattern = ? AND match = 'regex' AND direction = ?";
+            $ruleArgs = [$householdId, self::payee_pattern($txn['merchant']), $dir];
+            $prev = $makeRule ? $db->one($ruleSql, $ruleArgs) : null;
+            $r = self::set_category($db, $householdId, $txnId, $category, $makeRule);
+            $rule = $makeRule ? ['id' => (int)$db->val($ruleSql, $ruleArgs),
+                'prev' => $prev ? ['category' => $prev['category'], 'priority' => (int)$prev['priority'], 'source' => $prev['source']] : null] : null;
+            $r['undo'] = Undo::stash($db, $householdId, 'category', ['txns' => $txns, 'rule' => $rule]);
+            return $r;
+        });
+    }
+
+    /**
+     * The transactions nobody has sorted yet, one card per payee (so one choice sorts the lot), biggest groups first.
+     * A payee too vague for a rule gets a card per transaction.
+     */
+    public static function review_queue(Conn $db, int $householdId): array
+    {
+        $rows = $db->all("SELECT t.id, t.posted_on, t.description, t.merchant, t.amount_cents, a.label AS account
+                          FROM transactions t JOIN accounts a ON a.id = t.account_id
+                          WHERE t.household_id = ? AND t.category_source = 'none' AND t.is_transfer = 0
+                          ORDER BY t.posted_on DESC, t.id DESC", [$householdId]);
+        $groups = [];
+        foreach ($rows as $r) {
+            $remembers = self::specific_payee((string)$r['merchant']);
+            $key = $remembers ? ($r['amount_cents'] > 0 ? 'in:' : 'out:') . $r['merchant'] : 'txn:' . $r['id'];
+            $groups[$key] ??= ['id' => (int)$r['id'], 'merchant' => $r['merchant'], 'description' => $r['description'], 'posted_on' => $r['posted_on'],
+                'amount_cents' => (int)$r['amount_cents'], 'account' => $r['account'], 'count' => 0, 'total_cents' => 0, 'remembers' => $remembers];
+            $groups[$key]['count']++;
+            $groups[$key]['total_cents'] += (int)$r['amount_cents'];
+        }
+        $items = array_values($groups);
+        usort($items, fn($a, $b) => [$b['count'], abs($b['total_cents'])] <=> [$a['count'], abs($a['total_cents'])]);
+        return ['items' => $items, 'total' => count($rows)];
+    }
+
+    public static function to_review(Conn $db, int $householdId): int
+    {
+        return (int)$db->val("SELECT COUNT(*) FROM transactions WHERE household_id = ? AND category_source = 'none' AND is_transfer = 0", [$householdId]);
+    }
 }
 
 final class NotFound extends \RuntimeException {}
