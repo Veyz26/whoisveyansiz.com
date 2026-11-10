@@ -25,6 +25,17 @@ final class Scope
 final class Analysis
 {
     private const COUNTED = "t.is_transfer = 0 AND t.category NOT IN ('Transfers', 'Savings & investments')";
+
+    /** The transactions behind each figure on the cards ("in" came in, "spent" went out, "moved" to your own accounts). */
+    public static function flow_sql(string $flow): string
+    {
+        return match ($flow) {
+            'in' => "t.category = 'Income' AND t.amount_cents > 0 AND " . self::COUNTED,
+            'spent' => "t.category != 'Income' AND " . self::COUNTED,
+            'moved' => 'NOT (' . self::COUNTED . ')',
+            default => throw new \InvalidArgumentException('flow must be in, spent or moved'),
+        };
+    }
     private const FEE_KINDS = [
         ['ATM / cash withdrawal fees', '/ATM|CASH WITHDRAWAL|CASH WDL|WITHDRAWAL FEE/'],
         ['Notification fees', '/NOTIFICATION|SMS/'],

@@ -551,5 +551,85 @@ Statements::import($db, $hid, $stmt('1 July 2027 to 31 July 2027', 100000, [['02
 $cov = \Linen\Analysis::coverage($db, new \Linen\Scope($hid));
 check(($cov['2027-07'] ?? null) === 1.0, 'an account not uploaded for over two months (closed) stops holding later months back');
 
+
+// --- Undo: small deletes and category choices can be put back from the toast ----------------
+$db = fresh(['private_mode' => false]);
+$hid = $db->tx(fn($db) => Auth::create_household($db, 'U', ['V', 'T']));
+[$mv, $mt] = array_column(Budget::members($db, $hid), 'id');
+$goal = \Linen\Goals::save($db, $hid, ['name' => 'Holiday', 'target_cents' => 1000000, 'target_month' => '2027-12']);
+$line = Budget::create_line($db, $hid, ['member_id' => $mv, 'kind' => 'saving', 'name' => 'Holiday fund', 'category' => 'Savings & investments',
+    'amount_cents' => 50000, 'start_month' => '2027-01']);
+$db->exec('UPDATE budget_lines SET goal_id = ? WHERE id = ?', [$goal, $line]);
+Budget::set_amount($db, $hid, $line, '2027-03', 60000, 'onward', 'raise');
+Budget::set_paid($db, $hid, $line, '2027-02', true);
+$tok = Budget::delete_line($db, $hid, $line);
+check(is_string($tok) && strlen($tok) === 32 && !$db->val('SELECT 1 FROM budget_lines WHERE id = ?', [$line]), 'deleting a budget item returns an undo token');
+$r = \Linen\Undo::restore($db, $hid, $tok);
+$back = $db->one('SELECT * FROM budget_lines WHERE id = ?', [$r['id']]);
+check($r['kind'] === 'line' && $r['id'] === $line && $back['name'] === 'Holiday fund' && (int)$back['goal_id'] === $goal
+    && Budget::amount_on($db, $line, '2027-02') === 50000 && Budget::amount_on($db, $line, '2027-04') === 60000
+    && (int)$db->val('SELECT paid FROM line_status WHERE line_id = ? AND month = ?', [$line, '2027-02']) === 1,
+    'undo puts the item back with its id, amount history, paid ticks and goal link');
+throws(fn() => \Linen\Undo::restore($db, $hid, $tok), \Linen\ApiError::class, 'an undo token only works once', "can't be undone");
+throws(fn() => \Linen\Undo::restore($db, $hid, str_repeat('0', 32)), \Linen\ApiError::class, 'an unknown undo token is refused', "can't be undone");
+$tok = \Linen\Goals::delete($db, $hid, $goal);
+check($db->val('SELECT goal_id FROM budget_lines WHERE id = ?', [$line]) === null, 'deleting a goal unlinks its budget items');
+$r = \Linen\Undo::restore($db, $hid, $tok);
+check($r['id'] === $goal && (int)$db->val('SELECT goal_id FROM budget_lines WHERE id = ?', [$line]) === $goal, 'undoing a goal delete re-links its budget items');
+$other = $db->tx(fn($db) => Auth::create_household($db, 'Other', ['X']));
+$tok = Budget::delete_line($db, $hid, $line);
+throws(fn() => \Linen\Undo::restore($db, $other, $tok), \Linen\ApiError::class, "another household can't use the token", "can't be undone");
+\Linen\Undo::restore($db, $hid, $tok);
+$db->exec("UPDATE undo_items SET created_at = datetime('now', '-31 minutes')");
+$tok = Budget::delete_line($db, $hid, $line);
+check((int)$db->val('SELECT COUNT(*) FROM undo_items') === 1, 'stale snapshots are purged when a new one is taken');
+$db->exec("UPDATE undo_items SET created_at = datetime('now', '-31 minutes')");
+throws(fn() => \Linen\Undo::restore($db, $hid, $tok), \Linen\ApiError::class, 'an undo token expires after half an hour', "can't be undone");
+// Category choices: the merchant's other transactions follow, and undo puts every one of them (and the rule) back.
+Statements::import($db, $hid, "Date,Amount,Balance,Description\n2027/03/02,-120.00,1,POS Purchase Zorbas Widgets\n2027/03/09,-90.00,1,POS Purchase Zorbas Widgets\n2027/03/10,-5.00,1,Mr Q\n2027/03/11,300.00,1,Payment From Zorbas Widgets\n", $mv);
+$q = \Linen\Categorise::review_queue($db, $hid);
+check($q['total'] === 4 && count($q['items']) === 3 && $q['items'][0]['count'] === 2 && $q['items'][0]['total_cents'] === -21000 && $q['items'][0]['remembers'] === true
+    && $q['items'][0]['posted_on'] === '2027-03-09', 'the review inbox groups a payee\'s unsorted transactions, outgoing apart from incoming, biggest group first');
+$mystery = (int)$db->val("SELECT id FROM transactions WHERE description = 'Mr Q'");
+check(count(array_filter($q['items'], fn($i) => $i['id'] === $mystery && $i['remembers'] === false)) === 1, 'a vague payee gets its own card and no rule');
+check(\Linen\Categorise::to_review($db, $hid) === 4, 'the unsorted count matches');
+$r = \Linen\Categorise::set_category_undoable($db, $hid, $q['items'][0]['id'], 'Eating out');
+$sources = $db->all("SELECT category, category_source, rule_id FROM transactions WHERE description = 'POS Purchase Zorbas Widgets' ORDER BY id");
+check($r['updated'] === 2 && $r['rule_created'] && strlen($r['undo']) === 32 && $sources[0]['category'] === 'Eating out' && $sources[1]['category'] === 'Eating out'
+    && count(array_filter($sources, fn($s) => $s['category_source'] === 'rule' && $s['rule_id'] !== null)) === 1
+    && $db->val("SELECT category_source FROM transactions WHERE description = 'Payment From Zorbas Widgets'") === 'none', 'sorting one card sorts the payee\'s other outgoing transactions, not the incoming one');
+check(\Linen\Categorise::to_review($db, $hid) === 2, 'the inbox shrinks by the whole group');
+$rules = (int)$db->val("SELECT COUNT(*) FROM rules WHERE household_id = ? AND source = 'user'", [$hid]);
+\Linen\Undo::restore($db, $hid, $r['undo']);
+$sources = $db->all("SELECT category, category_source, rule_id, is_transfer FROM transactions WHERE description = 'POS Purchase Zorbas Widgets'");
+check($rules === 1 && (int)$db->val("SELECT COUNT(*) FROM rules WHERE household_id = ? AND source = 'user'", [$hid]) === 0
+    && count(array_filter($sources, fn($s) => $s['category'] === 'Other' && $s['category_source'] === 'none' && $s['rule_id'] === null)) === 2
+    && \Linen\Categorise::to_review($db, $hid) === 4, 'undoing a category choice restores every transaction it touched and removes the new rule');
+$r = \Linen\Categorise::set_category_undoable($db, $hid, $q['items'][0]['id'], 'Groceries');
+$r2 = \Linen\Categorise::set_category_undoable($db, $hid, $q['items'][0]['id'], 'Eating out');
+\Linen\Undo::restore($db, $hid, $r2['undo']);
+check($db->val("SELECT category FROM rules WHERE household_id = ? AND source = 'user'", [$hid]) === 'Groceries'
+    && $db->val("SELECT category FROM transactions WHERE id = ?", [$q['items'][0]['id']]) === 'Groceries', 'undoing a re-sort puts the earlier choice and its rule back');
+$r = \Linen\Categorise::set_category_undoable($db, $hid, $mystery, 'Transfers');
+check(!$r['rule_created'] && (int)$db->val('SELECT is_transfer FROM transactions WHERE id = ?', [$mystery]) === 1, 'a vague payee is sorted alone');
+\Linen\Undo::restore($db, $hid, $r['undo']);
+check((int)$db->val('SELECT is_transfer FROM transactions WHERE id = ?', [$mystery]) === 0, 'undo clears the transfer flag again');
+// Debts
+$debt = $db->insert('INSERT INTO debts (household_id, name, balance_cents, apr_bp, min_payment_cents) VALUES (?, ?, ?, ?, ?)', [$hid, 'Card', 500000, 2100, 25000]);
+$tok = \Linen\Undo::stash($db, $hid, 'debt', ['debt' => $db->one('SELECT * FROM debts WHERE id = ?', [$debt])]);
+$db->exec('DELETE FROM debts WHERE id = ?', [$debt]);
+\Linen\Undo::restore($db, $hid, $tok);
+check($db->one('SELECT name, balance_cents FROM debts WHERE id = ?', [$debt]) === ['name' => 'Card', 'balance_cents' => 500000], 'a removed debt comes back');
+// Drill-down: the "flow" filter selects exactly what each card's figure was summed from.
+$db->exec("UPDATE transactions SET category = 'Income', category_source = 'bank' WHERE description = 'Payment From Zorbas Widgets'");
+$db->exec("UPDATE transactions SET category = 'Savings & investments', category_source = 'bank' WHERE description = 'Mr Q'");
+$s = new \Linen\Scope($hid);
+[$in, $spent] = \Linen\Analysis::totals($db, $s, '2027-03');
+$sum = fn(string $flow) => (int)$db->val('SELECT COALESCE(SUM(t.amount_cents), 0) FROM transactions t WHERE t.household_id = ? AND substr(t.posted_on, 1, 7) = ? AND '
+    . \Linen\Analysis::flow_sql($flow), [$hid, '2027-03']);
+check($sum('in') === $in && -$sum('spent') === $spent && -$sum('moved') === \Linen\Analysis::summary($db, $s, '2027-03')['moved_cents'] && $in === 30000 && $spent === 21000,
+    'the in / spent / moved drill-downs add up to the figures on the cards');
+throws(fn() => \Linen\Analysis::flow_sql('sideways'), \InvalidArgumentException::class, 'an unknown flow is refused');
+
 echo $failures ? "\n$failures of $count checks FAILED\n" : "All $count checks passed\n";
 exit($failures ? 1 : 0);

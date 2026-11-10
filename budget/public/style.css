@@ -398,6 +398,55 @@ table.t { width: 100%; border-collapse: collapse; font-size: 14px; }
 }
 .toast svg { flex: none; width: 22px; height: 22px; padding: 4px; border-radius: 50%; color: #fff; background: #4f8a5d; stroke-width: 2.4; }
 .toast.err svg { background: #c2603a; }
+.toast .toast-act {
+  margin-left: 4px; border: 0; background: rgba(255, 255, 255, .14); color: inherit; font: inherit; font-weight: 600;
+  padding: 5px 12px; border-radius: 14px; cursor: pointer; white-space: nowrap;
+}
+.toast .toast-act:hover { background: rgba(255, 255, 255, .24); }
+.toast .toast-act:disabled { opacity: .5; cursor: default; }
+
+/* ---------- tap to drill down ---------- */
+.drill { cursor: pointer; }
+.drill:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.kpi.drill:hover { background: var(--surface-2); }
+.bar-row.drill { margin: 0 -8px; padding: 3px 8px; border-radius: 10px; transition: background .15s; }
+.bar-row.drill:hover { background: var(--surface-2); }
+.actuals-row .drill { border-radius: 10px; margin: -6px -8px; padding: 6px 8px; transition: background .15s; }
+.actuals-row .drill:hover { background: var(--surface-2); }
+.actuals-row .drill b { text-decoration: underline dotted var(--muted); text-underline-offset: 4px; }
+.legend-btn { border: 0; background: none; font: inherit; color: inherit; padding: 3px 8px; margin: -3px -8px; border-radius: 8px; cursor: pointer; display: inline-flex; align-items: center; gap: 0; }
+.legend-btn:hover { background: var(--surface-2); color: var(--text); }
+.dd-total { display: flex; align-items: baseline; gap: 12px; margin: 14px 0 16px; }
+.dd-total b { font-family: var(--serif); font-size: 30px; font-weight: 500; letter-spacing: -0.02em; }
+.dd-list { display: grid; gap: 4px; }
+.dd-row {
+  display: grid; grid-template-columns: 10px 1fr auto; gap: 12px; align-items: center; width: 100%; text-align: left;
+  border: 0; background: none; font: inherit; color: inherit; padding: 10px 10px; margin: 0 -10px; width: calc(100% + 20px); border-radius: 10px; cursor: pointer;
+}
+.dd-row:hover { background: var(--surface-2); }
+.dd-row .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dd-row .nm small { display: block; color: var(--muted); font-size: 12.5px; }
+.dd-row b { font-weight: 600; white-space: nowrap; }
+.dd-more { margin-top: 18px; }
+.dd-t td { vertical-align: top; }
+.dd-t td:first-child { white-space: nowrap; }
+
+/* ---------- review inbox ---------- */
+.rv-banner { border-color: var(--accent); }
+.rv-meter { margin: 6px 0 14px; height: 6px; }
+.rv-pos { margin-bottom: 8px; }
+.rv-card { padding: 18px 20px; border-radius: 14px; background: var(--surface-2); border: 1px solid var(--border); }
+.rv-amt { font-family: var(--serif); font-size: 32px; letter-spacing: -0.02em; line-height: 1.1; }
+.rv-amt.good { color: var(--good); }
+.rv-desc { font-weight: 600; margin: 6px 0 4px; overflow-wrap: anywhere; }
+.rv-hint { margin: 14px 0 10px; }
+.rv-cats { display: flex; flex-wrap: wrap; gap: 8px; }
+.rv-cats .btn { border-radius: 99px; }
+.rv-foot { margin-top: 16px; justify-content: flex-end; }
+.rv-done { text-align: center; padding: 24px 0 8px; }
+.rv-done h3 { font-size: 22px; margin-bottom: 6px; }
+.rv-done .rv-foot { justify-content: center; }
+.up-done { display: flex; gap: 10px; flex-wrap: wrap; }
 @keyframes rise { from { opacity: 0; transform: translate(-50%, 10px); } }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 18px; overflow-x: auto; }
 .tabs button { border: 0; background: none; padding: 10px 14px; cursor: pointer; color: var(--text-2); border-bottom: 2px solid transparent; white-space: nowrap; }
