@@ -10,7 +10,10 @@ import * as THREE from "./vendor/three/three.module.min.js";
 const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const color = (name, fallback) => new THREE.Color(cssVar(name) || fallback);
-const isDark = () => matchMedia("(prefers-color-scheme: dark)").matches && document.documentElement.dataset.theme !== "light";
+const isDark = () => {
+  const forced = document.documentElement.dataset.theme;  // set by the app's Appearance choice
+  return forced ? forced === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+};
 const easeOut = (x) => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
 
 export function webglAvailable() {
@@ -356,6 +359,7 @@ export function mountJars(host, people, { format, onTip }) {
   scheme.addEventListener("change", recolor);
 
   return {
+    recolor,
     dispose() {
       scheme.removeEventListener("change", recolor);
       removeEventListener("pointerup", up);
