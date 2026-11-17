@@ -7,7 +7,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "next dev",
-    "build": "next build --webpack && node scripts/ensure-out.mjs && node scripts/copy-budget.mjs",
+    "build": "next build --webpack && node scripts/ensure-out.mjs && node scripts/copy-budget.mjs && node scripts/make-cv-pdfs.mjs",
     "start": "next start",
     "preview": "npx serve out",
     "budget:dev": "sh budget/dev/serve.sh",
@@ -24,8 +24,7 @@
     "next": "^16.4.5",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "three": "^0.180.0",
-    "zustand": "^5.0.14"
+    "three": "^0.180.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.1",

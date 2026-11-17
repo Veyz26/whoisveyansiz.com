@@ -28,10 +28,15 @@ jobs:
 
       - run: npm ci
       - run: npm run build
+        env:
+          # The contact form's relay address (a repository variable, not a secret: it ends up in the
+          # public bundle either way). Without it the form is switched off and points visitors to LinkedIn.
+          NEXT_PUBLIC_CONTACT_ENDPOINT: ${{ vars.CONTACT_ENDPOINT }}
 
       - name: Check the build
         run: |
-          for f in out/index.html out/.htaccess out/private/index.php out/private/.htaccess out/private/app/.htaccess; do
+          for f in out/index.html out/.htaccess out/private/index.php out/private/.htaccess out/private/app/.htaccess \
+                   out/cv/Veyansiz-Chetty-CV.pdf out/cv/Veyansiz-Chetty-CV-one-page.pdf; do
             test -f "$f" || { echo "missing $f"; exit 1; }
           done
           if find out -name 'config.php' -o -name '*.db' -o -name '*.log' | grep -q .; then

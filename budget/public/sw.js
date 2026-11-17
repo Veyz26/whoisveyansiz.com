@@ -1,8 +1,8 @@
 // Service worker for the private budget PWA.
 // Caches only the app shell (page, script, styles, icons) so the app opens instantly and shows a
 // friendly offline screen. Budget data (/api/) is NEVER cached: it stays on the server, behind sign-in.
-const CACHE = "budget-shell-v14";
-const SHELL = ["./", "index.html", "app.js", "style.css", "manifest.webmanifest", "icons/icon.svg", "icons/icon-180.png", "icons/icon-192.png", "icons/icon-512.png"];
+const CACHE = "budget-shell-v15";
+const SHELL = ["./", "index.html", "app.js", "style.css", "manifest.webmanifest", "icons/icon.svg", "icons/icon-180.png", "icons/icon-192.png", "icons/icon-512.png", "fonts/BricolageGrotesque.woff2", "fonts/IBMPlexSans.woff2", "fonts/IBMPlexSans-Italic.woff2"];
 
 self.addEventListener("install", (e) => {
   // "reload": Hostinger's CDN tells browsers to keep these files for 4 hours, so skip the browser cache.

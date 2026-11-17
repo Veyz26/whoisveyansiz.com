@@ -1,89 +1,53 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
-import { Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import { cvData } from "@/data/cv";
 
-const inter = localFont({
-  src: [
-    {
-      path: "../fonts/Inter-Regular.woff2",
-      weight: "400",
-      style: "normal",
-    },
-    {
-      path: "../fonts/Inter-Medium.woff2",
-      weight: "500",
-      style: "normal",
-    },
-    {
-      path: "../fonts/Inter-SemiBold.woff2",
-      weight: "600",
-      style: "normal",
-    },
-    {
-      path: "../fonts/Inter-Bold.woff2",
-      weight: "700",
-      style: "normal",
-    },
-  ],
-  variable: "--font-sans",
-  display: "swap",
-  fallback: ["ui-sans-serif", "system-ui", "-apple-system", "sans-serif"],
-});
-
-// Ethereal, space-themed display font for headings, name and accents.
-// Self-hosted by next/font at build time, so it stays within the site's CSP.
-const spaceGrotesk = Space_Grotesk({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  variable: "--font-space",
+// Self-hosted, so the strict CSP (font-src 'self') holds. Michroma, wide and geometric, carries the name and
+// headings; IBM Plex Sans carries everything else, including every number (tabular figures).
+// To use Aqum instead (Slava Antipov's display face), put its woff2 in src/fonts and point this at it.
+const display = localFont({
+  src: "../fonts/Michroma.woff2",
+  weight: "400",
+  variable: "--font-display-face",
   display: "swap",
   fallback: ["ui-sans-serif", "system-ui", "sans-serif"],
 });
 
-export const metadata: Metadata = {
-  title: "Veyansiz Chetty | DevOps & Cloud Engineer",
-  description:
-    "Portfolio of Veyansiz Chetty — DevOps Engineer, Cloud Engineer, and Platform Engineer with 7+ years of experience in cloud infrastructure, automation, and operational excellence.",
-  keywords: [
-    "DevOps Engineer",
-    "Cloud Engineer",
-    "Platform Engineer",
-    "Azure",
-    "Kubernetes",
-    "CI/CD",
-    "Infrastructure",
-    "Veyansiz Chetty",
+const plex = localFont({
+  src: [
+    { path: "../fonts/IBMPlexSans.woff2", weight: "400 600", style: "normal" },
+    { path: "../fonts/IBMPlexSans-Italic.woff2", weight: "400", style: "italic" },
   ],
+  variable: "--font-plex",
+  display: "swap",
+  fallback: ["ui-sans-serif", "system-ui", "-apple-system", "sans-serif"],
+});
+
+const description =
+  "Veyansiz Chetty is a Platform Engineer at Capitec in Gauteng, specialising in site reliability and DevOps, with over seven years in infrastructure, automation and operations.";
+
+export const metadata: Metadata = {
+  title: "Veyansiz Chetty — Platform Engineer, SRE and DevOps",
+  description,
+  keywords: ["Platform Engineer", "Site Reliability Engineering", "SRE", "DevOps Engineer", "Cloud Engineer", "Systems Engineer", "Azure", "Kubernetes", "CI/CD", "Veyansiz Chetty"],
   authors: [{ name: "Veyansiz Chetty" }],
-  openGraph: {
-    title: "Veyansiz Chetty | DevOps & Cloud Engineer",
-    description:
-      "Portfolio of Veyansiz Chetty — DevOps Engineer, Cloud Engineer, and Platform Engineer.",
-    type: "website",
-    locale: "en_US",
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: "Veyansiz Chetty | DevOps & Cloud Engineer",
-    description:
-      "Portfolio of Veyansiz Chetty — DevOps Engineer, Cloud Engineer, and Platform Engineer.",
-  },
-  robots: {
-    index: true,
-    follow: true,
-  },
+  openGraph: { title: "Veyansiz Chetty — Platform Engineer, SRE and DevOps", description, type: "website", locale: "en_ZA" },
+  twitter: { card: "summary_large_image", title: "Veyansiz Chetty — Platform Engineer, SRE and DevOps", description },
+  robots: { index: true, follow: true },
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className="dark" style={{ colorScheme: "dark" }} suppressHydrationWarning>
+    <html lang="en" className={`dark ${display.variable} ${plex.variable}`} style={{ colorScheme: "dark" }} suppressHydrationWarning>
       <head>
+        {/* Colour-scheme preview: ?palette=<name> picks one of the alternatives in globals.css before anything
+            paints (so the 3D scene reads it too). Without the parameter the site uses Steel. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{var p=new URLSearchParams(location.search).get("palette");if(/^(night|mission|aurora|abyss|eclipse)$/.test(p||""))document.documentElement.dataset.palette=p}catch(e){}`,
+          }}
+        />
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{
@@ -92,20 +56,16 @@ export default function RootLayout({
               "@type": "Person",
               name: cvData.personal.name,
               jobTitle: cvData.personal.title,
-              description: "DevOps Engineer, Cloud Engineer, and Platform Engineer with 7+ years of experience in cloud infrastructure, automation, and operational excellence.",
-              address: {
-                "@type": "PostalAddress",
-                addressLocality: cvData.personal.location,
-              },
-              sameAs: [
-                cvData.personal.linkedin,
-                cvData.personal.github,
-              ],
+              worksFor: { "@type": "Organization", name: cvData.experience[0].company },
+              knowsAbout: ["Site Reliability Engineering", "DevOps", "Microsoft Azure", "AWS", "Linux", "CI/CD", "Ansible", "Incident Management", "Disaster Recovery"],
+              description,
+              address: { "@type": "PostalAddress", addressLocality: cvData.personal.location },
+              sameAs: [cvData.personal.linkedin, cvData.personal.github],
             }),
           }}
         />
       </head>
-      <body className={`${inter.variable} ${spaceGrotesk.variable} font-sans antialiased bg-[#03020d] text-white`}>
+      <body className="font-sans bg-space text-bone">
         <main id="main">{children}</main>
       </body>
     </html>

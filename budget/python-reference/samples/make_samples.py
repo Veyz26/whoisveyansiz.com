@@ -18,41 +18,41 @@ def fnb_rows(rng: random.Random) -> list[tuple[date, float, str]]:
     for y, m in MONTHS:
         d = lambda day: date(y, m, day)  # noqa: E731
         rows += [
-            (d(1), -9500.00, "DEBIT ORDER CITY PROPERTY RENTAL REF 88213"),
-            (d(1), -199.00, "#Monthly Account Fee"),
-            (d(2), -3200.00, "DEBIT ORDER DISCOVERY HEALTH 4400123"),
-            (d(3), -5200.00, "DEBIT ORDER WESBANK VEHICLE FINANCE 7711"),
-            (d(3), -499.00, "DEBIT ORDER VODACOM CONTRACT"),
-            (d(5), -199.00, "POS PURCHASE NETFLIX.COM 4512 **** **** 9921 05 " + f"{m:02d}"),
-            (d(6), -99.00, "POS PURCHASE SHOWMAX 4512*9921"),
-            (d(7), -64.99, "POS PURCHASE SPOTIFY P1B2C3 4512*9921"),
-            (d(8), -36.00, "#SMS Notification Fee"),
-            (d(26), 32000.00, "SALARY ACME SOLUTIONS PTY"),
-            (d(26), -3000.00, "FNB App Transfer To Capitec Savings"),
-            (d(28), -850.00, "Internet Pmt To Old Mutual Funeral"),
-            (d(28), -320.50 - m, "#Interest On Overdraft"),
-            (d(20), -400.00, "ATM CASH WITHDRAWAL MENLYN"),
+            (d(1), -8750.00, "DEBIT ORDER OAKRIDGE RENTALS REF 40117"),
+            (d(1), -175.00, "#Monthly Account Fee"),
+            (d(2), -2850.00, "DEBIT ORDER BONITAS MEDICAL AID 5510872"),
+            (d(3), -4650.00, "DEBIT ORDER AUTOFIN VEHICLE FINANCE 3390"),
+            (d(3), -459.00, "DEBIT ORDER MTN CONTRACT"),
+            (d(5), -199.00, "POS PURCHASE NETFLIX.COM 5287 **** **** 0417 05 " + f"{m:02d}"),
+            (d(6), -99.00, "POS PURCHASE SHOWMAX 5287*0417"),
+            (d(7), -79.99, "POS PURCHASE SPOTIFY P1B2C3 5287*0417"),
+            (d(8), -31.50, "#SMS Notification Fee"),
+            (d(26), 29400.00, "SALARY NORTHWIND LOGISTICS PTY"),
+            (d(26), -2500.00, "FNB App Transfer To Capitec Savings"),
+            (d(28), -640.00, "Internet Pmt To Sanlam Funeral Plan"),
+            (d(28), -284.20 - m, "#Interest On Overdraft"),
+            (d(20), -500.00, "ATM CASH WITHDRAWAL ELMWOOD"),
             (d(20), -12.50, "#Cash Withdrawal Fee ATM"),
-            (d(12), -400.00, "ATM CASH WITHDRAWAL BROOKLYN"),
+            (d(12), -300.00, "ATM CASH WITHDRAWAL STONEBRIDGE"),
             (d(12), -12.50, "#Cash Withdrawal Fee ATM"),
-            (d(15), -230.00, "POS PURCHASE LITTLE GECKO TRADING 4512*9921"),
+            (d(15), -185.00, "POS PURCHASE LANTERN AND QUILL TRADING 5287*0417"),
         ]
         for day in (4, 11, 18, 25):
-            rows.append((d(day), -round(rng.uniform(650, 1100), 2), "POS PURCHASE CHECKERS HAZELWOOD 4512*9921"))
+            rows.append((d(day), -round(rng.uniform(540, 980), 2), "POS PURCHASE WOOLWORTHS ELMWOOD 5287*0417"))
         for day in (9, 23):
-            rows.append((d(day), -round(rng.uniform(700, 900), 2), "POS PURCHASE ENGEN LYNNWOOD 4512*9921"))
+            rows.append((d(day), -round(rng.uniform(620, 840), 2), "POS PURCHASE SHELL STONEBRIDGE 5287*0417"))
         n_eats = 7 if m == 10 else 2  # October spike
         for i in range(n_eats):
-            rows.append((d(10 + i * 2), -round(rng.uniform(140, 260), 2), "POS PURCHASE UBER EATS 4512*9921"))
-        rows.append((d(19), -round(rng.uniform(200, 900), 2), "POS PURCHASE TAKEALOT.COM 4512*9921"))
+            rows.append((d(10 + i * 2), -round(rng.uniform(120, 240), 2), "POS PURCHASE MR D FOOD 5287*0417"))
+        rows.append((d(19), -round(rng.uniform(180, 760), 2), "POS PURCHASE TAKEALOT.COM 5287*0417"))
     # an identical pair on the same day (must not be treated as duplicates)
-    rows.append((date(2026, 10, 14), -35.00, "POS PURCHASE VIDA E CAFFE 4512*9921"))
-    rows.append((date(2026, 10, 14), -35.00, "POS PURCHASE VIDA E CAFFE 4512*9921"))
+    rows.append((date(2026, 10, 14), -42.00, "POS PURCHASE VIDA E CAFFE 5287*0417"))
+    rows.append((date(2026, 10, 14), -42.00, "POS PURCHASE VIDA E CAFFE 5287*0417"))
     return sorted(rows, key=lambda r: r[0])
 
 
 def write_fnb(rows, path: Path) -> None:
-    balance = 18200.00
+    balance = 15400.00
     with path.open("w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["ACCOUNT TRANSACTION HISTORY"])
@@ -71,23 +71,23 @@ def capitec_rows(rng: random.Random):
     for y, m in MONTHS:
         d = lambda day: date(y, m, day)  # noqa: E731
         rows += [
-            (d(26), 3000.00, None, None, "Payment Received: Own FNB", "Transfer"),
-            (d(2), None, 1500.00, None, "Capitec Personal Loan Repayment", "Loans"),
-            (d(2), None, 410.00 + m, None, "Personal Loan Interest", "Interest"),
+            (d(26), 2500.00, None, None, "Payment Received: Own FNB", "Transfer"),
+            (d(2), None, 1250.00, None, "Capitec Personal Loan Repayment", "Loans"),
+            (d(2), None, 352.00 + m, None, "Personal Loan Interest", "Interest"),
             (d(3), None, 7.50, None, "Monthly Account Admin Fee", "Fees"),
-            (d(27), None, 1000.00, None, "Transfer to Savings Pocket", "Investments"),
-            (d(16), None, 300.00, 10.00, "Cash Withdrawal Capitec ATM", "Cash Withdrawal"),
-            (d(22), None, 300.00, 10.00, "Cash Withdrawal Capitec ATM", "Cash Withdrawal"),
-            (d(13), None, round(rng.uniform(300, 600), 2), None, "Pick n Pay Menlyn", "Groceries"),
-            (d(21), None, round(rng.uniform(60, 140), 2), None, "Uber Trip", "Transport"),
+            (d(27), None, 1200.00, None, "Transfer to Savings Pocket", "Investments"),
+            (d(16), None, 200.00, 10.00, "Cash Withdrawal Capitec ATM", "Cash Withdrawal"),
+            (d(22), None, 400.00, 10.00, "Cash Withdrawal Capitec ATM", "Cash Withdrawal"),
+            (d(13), None, round(rng.uniform(280, 560), 2), None, "Spar Elmwood", "Groceries"),
+            (d(21), None, round(rng.uniform(55, 130), 2), None, "Bolt Trip", "Transport"),
             (d(24), None, 159.00, None, "Disney Plus", "Digital Subscriptions"),
-            (d(17), None, round(rng.uniform(250, 500), 2), None, "Mr Price Menlyn", "Clothing"),
+            (d(17), None, round(rng.uniform(220, 470), 2), None, "Pep Stonebridge", "Clothing"),
         ]
     return sorted(rows, key=lambda r: r[0])
 
 
 def write_capitec(rows, path: Path) -> None:
-    balance = 6500.00
+    balance = 5200.00
     with path.open("w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["Nr", "Account", "Posting Date", "Transaction Date", "Description", "Original Description",

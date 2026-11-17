@@ -49,6 +49,15 @@ This is a static site with no backend, so the value is **inlined into the JS
 bundle at build time**. Only put a form-relay endpoint here — never a real API
 key, email address or phone number.
 
+## CV downloads and sound
+
+- **CV PDFs.** `/cv/` and `/cv/one-page/` render the CV from `src/data/cv.ts`, the same data as the site.
+  After `next build`, `scripts/make-cv-pdfs.mjs` prints both to `out/cv/*.pdf` with headless Chrome, so the
+  PDFs always match the site. Chrome is preinstalled on GitHub's runners; locally it uses Google Chrome
+  (or `CHROME_PATH`). Phone and email stay out of both, as on the site.
+- **Sound.** Music and effects are synthesised in the browser (`src/components/site/sound.ts`), so there
+  are no audio files or licences. Sound is off until the visitor turns it on with the speaker button.
+
 ## Deploying to Hostinger (Business plan)
 
 The site builds to plain HTML/CSS/JS, so it goes in `public_html` — no Node
