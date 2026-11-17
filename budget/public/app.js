@@ -98,7 +98,7 @@ function applyTheme(t = theme()) {
   // The browser bar follows the page: both tags get the chosen colour, or their own again on "auto".
   $$('meta[name="theme-color"]').forEach((m) => {
     m.dataset.auto = m.dataset.auto || m.content;
-    m.content = t === "auto" ? m.dataset.auto : t === "dark" ? "#171310" : "#f6f1ea";
+    m.content = t === "auto" ? m.dataset.auto : t === "dark" ? "#06080f" : "#f2f1ec";
   });
 }
 function setTheme(t) { store.set("theme", t === "auto" ? null : t); applyTheme(t); S.fx?.recolor?.(); }

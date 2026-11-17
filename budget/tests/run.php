@@ -153,7 +153,7 @@ $r = Statements::import($db, $ha, file_get_contents(__DIR__ . '/fnb_sample.csv')
 check($r['rows_added'] === 88 && $r['rows_duplicate'] === 0, 'FNB sample imports 88 rows');
 $again = Statements::import($db, $ha, file_get_contents(__DIR__ . '/fnb_sample.csv'), $ma, 'auto', 'FNB');
 check($again['rows_added'] === 0, 're-import adds nothing');
-check(!$db->val("SELECT 1 FROM transactions WHERE description LIKE '%4512%'"), 'card numbers are masked');
+check(!$db->val("SELECT 1 FROM transactions WHERE description LIKE '%5287%'"), 'card numbers are masked');
 Budget::create_line($db, $ha, ['member_id' => $ma, 'kind' => 'expense', 'name' => '=HYPERLINK("x")', 'amount_cents' => 1, 'start_month' => '2026-01']);
 check(!preg_match('/\n[^\n]*,=HYPERLINK/', Export::csv($db, $ha, 'fact_budget')), 'CSV export neutralises formulas');
 $tokPbi = Auth::create_api_token($db, $ha, $a, 'PBI');

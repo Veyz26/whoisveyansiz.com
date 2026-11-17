@@ -33,3 +33,7 @@ budget/dev/data/
 *.db-wal
 *.db-shm
 __pycache__/
+
+# build cache and local hosting exports
+*.tsbuildinfo
+whoisveyansiz-public_html.zip

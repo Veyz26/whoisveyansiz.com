@@ -429,13 +429,13 @@ export function mountBackdrop(host) {
 
   const stamp = coinStamp();
   const tones = isDark()
-    ? ["#d6b396", "#efe4d6", "#9a7259", "#b48a64", "#3a3029"]
-    : ["#ecdccb", "#fffaf3", "#c9a98c", "#9a7259", "#3a2f28"];
+    ? ["#e9a23b", "#f2f1ec", "#8a93a6", "#c77f1e", "#1c2435"]
+    : ["#e6e7ec", "#ffffff", "#e9a23b", "#c9c9c0", "#141b2d"];
   const coinGeo = new THREE.CylinderGeometry(0.62, 0.62, 0.13, 64);
   const pearlGeo = new THREE.SphereGeometry(0.5, 48, 32);
   const pearl = new THREE.MeshPhysicalMaterial({
-    color: isDark() ? "#e9ddd0" : "#f6efe6", roughness: 0.22, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08,
-    iridescence: 0.7, iridescenceIOR: 1.35, sheen: 0.6, sheenColor: new THREE.Color("#ffe9dc"), envMapIntensity: 1.3,
+    color: isDark() ? "#1a2234" : "#f4f3ee", roughness: 0.22, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08,
+    iridescence: 0.7, iridescenceIOR: 1.35, sheen: 0.6, sheenColor: new THREE.Color("#fff1d6"), envMapIntensity: 1.3,
   });
 
   // Place things in a loose ring so the middle (where the sign-in card sits) stays calm.

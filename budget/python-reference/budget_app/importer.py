@@ -15,7 +15,7 @@ from .parsers import RawTxn, parse_statement
 _CARDLIKE = re.compile(
     r"(?<![\dA-Za-z])(?:"
     r"\d{4}[ -]?[\d*xX•]{4}[ -]?[\d*xX•]{4}[ -]?\d{1,7}"  # card numbers, masked or not
-    r"|\d{4,6}[*xX•]+\d{4}"                                # short masked cards: 4512*9921
+    r"|\d{4,6}[*xX•]+\d{4}"                                # short masked cards: 5287*0417
     r")(?![\dA-Za-z])"
     r"|(?<!\d)\d{9,}(?!\d)"                                 # account / long reference numbers, also glued to letters
 )

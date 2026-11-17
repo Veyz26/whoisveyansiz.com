@@ -1,146 +1,237 @@
 @import "tailwindcss";
 
+/* Colours live in variables so the 3D journey (which reads --c-node, --c-edge, ...) matches the page.
+   Each: a ground, panels, text, a muted text, one accent for what's active or pressable, a status colour,
+   and the network's node / host / link / traffic colours. */
 @theme {
-  --color-silver-50: #fafafa;
-  --color-silver-100: #f5f5f5;
-  --color-silver-200: #e5e5e5;
-  --color-silver-300: #d4d4d4;
-  --color-silver-400: #a3a3a3;
-  --color-silver-500: #737373;
-  --color-silver-600: #525252;
-  --color-silver-700: #404040;
-  --color-silver-800: #262626;
-  --color-silver-900: #171717;
-  --color-silver-950: #0a0a0a;
-  --color-accent: #c0c0c0;
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-space: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --color-space: var(--c-space);
+  --color-panel: var(--c-panel);
+  --color-panel-2: var(--c-panel-2);
+  --color-bone: var(--c-bone);
+  --color-slate: var(--c-slate);
+  --color-accent: var(--c-accent);
+  --color-ok: var(--c-ok);
+  --color-line: var(--c-line);
+  --color-screen: var(--c-screen);
+  --font-sans: var(--font-plex), "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-display-face), "Michroma", ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Steel (the default): true black ground, white text, midnight-blue panels, steel-grey accents and links,
+   cool white screens and satellites. The alternatives below are kept for comparing: open the site with
+   ?palette=<name>. */
+:root {
+  --c-space: #020305; --c-panel: #0b1531; --c-panel-2: #111e42; --c-bone: #f7f9fc; --c-slate: #a7b2c1;
+  --c-accent: #a9b8ca; --c-ok: #8fb6e8; --c-line: rgba(247, 249, 252, 0.14);
+  --c-node: #ffffff; --c-host: #44536f; --c-edge: #5f708f; --c-traffic: #c3cedc; --c-screen: #cdd8ea;
+}
+/* Night shift: deep indigo, cyan systems and screens, coral traffic and actions, teal for "in service". */
+:root[data-palette="night"] {
+  --c-space: #0b1026; --c-panel: #121937; --c-panel-2: #192146; --c-bone: #eef0fb; --c-slate: #a1a9cc;
+  --c-accent: #ff6b5b; --c-ok: #4fe3c1; --c-line: rgba(238, 240, 251, 0.14);
+  --c-node: #7ee8f0; --c-host: #5b6696; --c-edge: #8189c4; --c-traffic: #ff6b5b; --c-screen: #7ee8f0;
+}
+/* Mission control: graphite consoles, warm paper text, amber CRT screens and actions. */
+:root[data-palette="mission"] {
+  --c-space: #0d0e11; --c-panel: #17191d; --c-panel-2: #1f2228; --c-bone: #f2ede3; --c-slate: #aaa395;
+  --c-accent: #ffb000; --c-ok: #7bd88f; --c-line: rgba(242, 237, 227, 0.14);
+  --c-node: #ffd27a; --c-host: #6d6656; --c-edge: #8f8570; --c-traffic: #ffb000; --c-screen: #ffc24d;
+}
+/* Aurora: a pine-black night, aurora green systems and screens, violet actions. */
+:root[data-palette="aurora"] {
+  --c-space: #06120f; --c-panel: #0c1d19; --c-panel-2: #122822; --c-bone: #e8f3ee; --c-slate: #9cb8ad;
+  --c-accent: #b48cff; --c-ok: #5ef2a8; --c-line: rgba(232, 243, 238, 0.14);
+  --c-node: #5ef2a8; --c-host: #3f6b5d; --c-edge: #5c9c86; --c-traffic: #b48cff; --c-screen: #5ef2a8;
+}
+/* Abyss: deep-ocean navy, ice-blue screens, electric-blue actions. */
+:root[data-palette="abyss"] {
+  --c-space: #040b16; --c-panel: #0a1628; --c-panel-2: #0f1f36; --c-bone: #e6eef8; --c-slate: #93a6c0;
+  --c-accent: #3d9cff; --c-ok: #45e0c8; --c-line: rgba(230, 238, 248, 0.13);
+  --c-node: #8fd3ff; --c-host: #355377; --c-edge: #4f7bb0; --c-traffic: #3d9cff; --c-screen: #8fd3ff;
+}
+/* Eclipse: near-black plum, gold corona screens and actions, rose traffic. */
+:root[data-palette="eclipse"] {
+  --c-space: #0e0a14; --c-panel: #18121f; --c-panel-2: #21182b; --c-bone: #f3ecf6; --c-slate: #b3a6bd;
+  --c-accent: #ffa94d; --c-ok: #7ee0b0; --c-line: rgba(243, 236, 246, 0.13);
+  --c-node: #ffcf8a; --c-host: #5e4a6e; --c-edge: #8a6fa3; --c-traffic: #ff7aa8; --c-screen: #ffcf8a;
 }
 
 @layer base {
-  :root {
-    --background: 0 0% 100%;
-    --foreground: 0 0% 5%;
-    --muted: 0 0% 96%;
-    --muted-foreground: 0 0% 40%;
-    --border: 0 0% 90%;
-    --card: 0 0% 100%;
-    --card-foreground: 0 0% 5%;
-    --glass: rgba(255, 255, 255, 0.6);
-    --glass-border: rgba(255, 255, 255, 0.2);
-  }
-
-  .dark {
-    --background: 0 0% 4%;
-    --foreground: 0 0% 95%;
-    --muted: 0 0% 12%;
-    --muted-foreground: 0 0% 60%;
-    --border: 0 0% 18%;
-    --card: 0 0% 8%;
-    --card-foreground: 0 0% 95%;
-    --glass: rgba(10, 10, 10, 0.6);
-    --glass-border: rgba(255, 255, 255, 0.08);
-  }
-
-  * {
-    border-color: hsl(var(--border));
-  }
-
   html {
     scroll-behavior: smooth;
+    scroll-padding-top: 72px;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
-
   body {
-    background-color: hsl(var(--background));
-    color: hsl(var(--foreground));
+    background-color: var(--color-space);
+    color: var(--color-bone);
     font-family: var(--font-sans);
+    font-variant-numeric: tabular-nums;
   }
-
-  h1,
-  h2,
-  h3 {
-    font-family: var(--font-space);
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    font-weight: 400;
+    letter-spacing: 0.02em;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 3px;
+  }
+  ::selection {
+    background: var(--color-accent);
+    color: var(--color-space);
   }
 }
 
 @layer components {
-  .glass-card {
-    background: var(--glass);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border: 1px solid var(--glass-border);
+  /* An opaque panel: readable over the stars without blur. */
+  .panel {
+    background: color-mix(in srgb, var(--color-panel) 94%, transparent);
+    border: 1px solid var(--color-line);
+    border-radius: 12px;
   }
-
-  .gradient-text {
-    color: #000000;
-    -webkit-text-fill-color: #000000;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  .btn-primary {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--color-accent); color: var(--color-space);
+    font-weight: 500; font-size: 15px; padding: 11px 20px; border-radius: 8px;
+    transition: filter .15s ease;
   }
-
-  .dark .gradient-text {
-    color: transparent;
-    -webkit-text-fill-color: transparent;
-    background: linear-gradient(135deg, #ffffff 0%, #e5e5e5 50%, #a3a3a3 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
+  .btn-primary:hover { filter: brightness(1.06); }
+  /* Keeps the hero text readable over the map: solid ground behind the words, fading to the map. */
+  .hero-scrim {
+    -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent);
+    mask-image: linear-gradient(to bottom, #000 55%, transparent);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--color-space) 30%, transparent) 0%,
+      color-mix(in srgb, var(--color-space) 82%, transparent) 55%, var(--color-space) 100%);
   }
-
-  .glow {
-    box-shadow: 0 0 30px rgba(100, 100, 100, 0.12),
-      0 0 60px rgba(100, 100, 100, 0.04);
-  }
-
-  .dark .glow {
-    box-shadow: 0 0 30px rgba(192, 192, 192, 0.1),
-      0 0 60px rgba(192, 192, 192, 0.03);
-  }
-
-  .section-padding {
-    padding-left: 1.5rem;
-    padding-right: 1.5rem;
-    padding-top: 6rem;
-    padding-bottom: 6rem;
-  }
-
-  @media (min-width: 768px) {
-    .section-padding {
-      padding-left: 4rem;
-      padding-right: 4rem;
+  @media (min-width: 1024px) {
+    .hero-scrim {
+      background: linear-gradient(90deg, color-mix(in srgb, var(--color-space) 92%, transparent) 0%,
+        color-mix(in srgb, var(--color-space) 70%, transparent) 34%, color-mix(in srgb, var(--color-space) 10%, transparent) 60%, transparent 72%);
     }
   }
-
-  @media (min-width: 1280px) {
-    .section-padding {
-      padding-left: 6rem;
-      padding-right: 6rem;
-      padding-top: 8rem;
-      padding-bottom: 8rem;
-    }
+  .btn-primary:disabled { opacity: .5; }
+  .btn-ghost {
+    display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid var(--color-line); color: var(--color-bone);
+    font-weight: 500; font-size: 15px; padding: 10px 18px; border-radius: 8px;
+    transition: border-color .15s ease, background .15s ease;
   }
+  .btn-ghost:hover { border-color: rgba(242, 241, 236, 0.35); background: rgba(242, 241, 236, 0.04); }
+  .display-name {
+    font-family: var(--font-display);
+    font-weight: 400;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    line-height: 1.02;
+  }
+  .card-title {
+    font-family: var(--font-display);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 1.25rem;
+    line-height: 1.3;
+  }
+  .terminal {
+    background: color-mix(in srgb, var(--c-space) 92%, black);
+    border: 1px solid color-mix(in srgb, var(--c-screen) 28%, transparent);
+    border-radius: 6px;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-space) 60%, transparent), 0 0 80px color-mix(in srgb, var(--c-screen) 10%, transparent);
+  }
+  html[data-webgl] .contact-fallback { display: none; }
+  .screen-ui { position: absolute; left: 0; top: 0; transform-origin: 0 0; visibility: hidden; }
+  .screen-ui[data-mode="live"] { pointer-events: auto; }
+  .screen-ui:not([data-mode="live"]) { pointer-events: none; }
+  .terminal-prompt { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .field {
+    width: 100%; background: var(--color-panel-2); border: 1px solid var(--color-line); border-radius: 8px;
+    padding: 10px 12px; font-size: 15px; color: var(--color-bone);
+  }
+  .field::placeholder { color: rgba(242, 241, 236, 0.35); }
+  .field:focus { outline: none; border-color: var(--color-accent); }
+  /* The section you're at, underlined in the header; the header's button steps aside while the hero's is in view. */
+  .nav-link { padding-block: 4px; border-bottom: 2px solid transparent; }
+  html[data-stop="about"] [data-nav="about"], html[data-stop="work"] [data-nav="work"],
+  html[data-stop="results"] [data-nav="results"], html[data-stop="skills"] [data-nav="skills"],
+  html[data-stop="contact"] [data-nav="contact"] { color: var(--color-bone); border-color: var(--color-accent); }
+  html[data-stop="top"] .header-cta { visibility: hidden; }
+  .more > summary { list-style: none; display: inline-flex; align-items: center; gap: 8px; }
+  .more > summary::before { content: "+"; display: inline-block; width: 1ch; font-weight: 600; }
+  .more[open] > summary::before { content: "\2212"; }
+  .more > summary::-webkit-details-marker { display: none; }
+  .more[open] > summary { color: var(--color-slate); }
+  .map-label {
+    position: absolute; left: 0; top: 0; white-space: nowrap; font-size: 13px; font-weight: 500;
+    color: var(--color-bone); opacity: 0; will-change: transform, opacity;
+    text-shadow: 0 0 6px var(--color-space), 0 0 2px var(--color-space);
+  }
+  .map-label.is-hot { color: var(--color-accent); }
+  @media (max-width: 639px) { .map-label { font-size: 11.5px; } }
+  .scroll-panel { scrollbar-width: thin; scrollbar-color: rgba(242,241,236,.2) transparent; }
 }
 
-/* Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  .map-label { transition: none; }
 }
 
-::-webkit-scrollbar-track {
-  background: transparent;
+/* The CV pages (/cv/ and /cv/one-page/): an A4 sheet on screen, and exactly the sheet when printed. */
+.cv-page { min-height: 100svh; padding: 0 16px 48px; background: var(--color-space); }
+.cv-toolbar { max-width: 210mm; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 0; font-size: 14px; }
+.cv-toolbar a:not(.btn-primary) { color: var(--color-bone); text-decoration: underline; text-underline-offset: 4px; text-decoration-color: rgba(238, 240, 251, 0.35); }
+.cv-actions { display: flex; align-items: center; gap: 16px; }
+.cv-sheet {
+  max-width: 210mm; min-height: 297mm; margin: 0 auto; padding: 16mm 17mm; background: #fff; color: #1a1d29;
+  font-family: var(--font-sans); font-size: 10pt; line-height: 1.45; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+}
+.cv-sheet a { color: inherit; }
+.cv-head { border-bottom: 2px solid #0b1531; padding-bottom: 10px; margin-bottom: 4px; }
+.cv-name { font-family: var(--font-display); text-transform: uppercase; letter-spacing: 0.06em; font-size: 20pt; line-height: 1.1; color: #0b1531; }
+.cv-role { margin-top: 4px; font-size: 11pt; font-weight: 600; color: #0b1531; }
+.cv-contact { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 9pt; color: #4a5068; }
+.cv-h { margin: 12px 0 5px; font-family: var(--font-display); text-transform: uppercase; letter-spacing: 0.08em; font-size: 9.5pt; color: #0b1531; }
+.cv-job { margin-bottom: 8px; }
+/* A job may run onto the next page between duties, but its title, dates and summary stay together and with
+   its first duty; a single duty never splits. */
+.cv-job-head { break-inside: avoid; break-after: avoid; }
+.cv-list li { break-inside: avoid; }
+.cv-keep { break-inside: avoid; }
+.cv-h { break-after: avoid; }
+.cv-job-line { display: flex; justify-content: space-between; gap: 12px; }
+.cv-nowrap { white-space: nowrap; }
+.cv-muted { color: #5d6480; }
+.cv-summary { color: #2d3246; }
+.cv-list { margin-top: 3px; }
+.cv-list li { position: relative; margin-top: 2px; padding-left: 13px; }
+.cv-list li::before { content: ""; position: absolute; left: 2px; top: 0.62em; width: 4px; height: 4px; border-radius: 50%; background: #5f708f; }
+.cv-skill { margin-top: 2px; }
+.cv-skill strong { color: #0b1531; font-weight: 600; }
+.cv-rows li { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin-top: 2px; }
+.cv-rows li > span:last-child { white-space: nowrap; text-align: right; }
+.cv-compact { font-size: 9.5pt; line-height: 1.42; }
+.cv-compact .cv-h { margin-top: 9px; }
+.cv-compact .cv-job { margin-bottom: 5px; }
+.cv-compact .cv-rows li, .cv-compact .cv-skill { margin-top: 1px; }
+/* Margins come from the page box, so every printed page has them, not just the first. */
+@page { size: A4; margin: 14mm 16mm 13mm; }
+@media print {
+  /* The site is dark (color-scheme on <html>); paper is not, margins included. */
+  :root { color-scheme: light !important; background: #fff !important; }
+  html, body { background: #fff !important; }
+  .cv-page { padding: 0; background: #fff; min-height: 0; }
+  .cv-toolbar { display: none; }
+  .cv-sheet { box-shadow: none; max-width: none; min-height: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 
-::-webkit-scrollbar-thumb {
-  background: #525252;
-  border-radius: 3px;
-}
+/* Swatches in the colour-scheme picker (each palette's accent). */
+[data-swatch="night"] { background: #ff6b5b; }
+[data-swatch="mission"] { background: #ffb000; }
+[data-swatch="aurora"] { background: #b48cff; box-shadow: inset -5px 0 0 #5ef2a8; }
+[data-swatch="abyss"] { background: #3d9cff; }
+[data-swatch="steel"] { background: #a9b8ca; box-shadow: inset -5px 0 0 #0b1531, 0 0 0 1px #f7f9fc55; }
+[data-swatch="eclipse"] { background: #ffa94d; box-shadow: inset -5px 0 0 #ff7aa8; }
 
-::-webkit-scrollbar-thumb:hover {
-  background: #737373;
-}
-
-/* Selection */
-::selection {
-  background: rgba(192, 192, 192, 0.3);
-  color: inherit;
-}
+/* The hero's Download CV menu. */
+.cv-menu > summary::-webkit-details-marker { display: none; }
+.cv-menu[open] .cv-menu-chevron { transform: rotate(180deg); }

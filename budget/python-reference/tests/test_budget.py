@@ -55,11 +55,11 @@ class ParserTests(unittest.TestCase):
             parse_statement("hello,world\n1,2\n")
 
     def test_card_numbers_masked(self):
-        for raw in ("PURCHASE 4512 3456 7890 9921", "PURCHASE 4512 **** **** 9921", "PURCHASE 451234*9921"):
+        for raw in ("PURCHASE 5287 3456 7890 0417", "PURCHASE 5287 **** **** 0417", "PURCHASE 528734*0417"):
             out = sanitise_description(raw)
             self.assertNotIn("4512", out)
-            self.assertIn("9921", out)
-        self.assertEqual(merchant_key("POS PURCHASE CHECKERS HAZELWOOD ****9921"), "CHECKERS HAZELWOOD")
+            self.assertIn("0417", out)
+        self.assertEqual(merchant_key("POS PURCHASE WOOLWORTHS ELMWOOD ****0417"), "WOOLWORTHS ELMWOOD")
 
 
 class Base(unittest.TestCase):
@@ -93,12 +93,12 @@ class StatementTests(Base):
     def test_transfers_linked_and_categories(self):
         import_statement(self.conn, self.hid, FNB, member_id=self.v, account_label="FNB")
         import_statement(self.conn, self.hid, CAPITEC, member_id=self.t, account_label="Capitec")
-        n = self.conn.execute("SELECT COUNT(*) FROM transactions WHERE is_transfer = 1 AND abs(amount_cents) = 300000").fetchone()[0]
+        n = self.conn.execute("SELECT COUNT(*) FROM transactions WHERE is_transfer = 1 AND abs(amount_cents) = 250000").fetchone()[0]
         self.assertEqual(n, 6)
         cat = lambda m: self.conn.execute("SELECT DISTINCT category FROM transactions WHERE merchant = ?", (m,)).fetchone()[0]
-        self.assertEqual(cat("UBER EATS"), "Eating out")
-        self.assertEqual(cat("UBER TRIP"), "Fuel & transport")
-        self.assertEqual(cat("DISCOVERY HEALTH"), "Medical & health")
+        self.assertEqual(cat("MR D FOOD"), "Eating out")
+        self.assertEqual(cat("BOLT TRIP"), "Fuel & transport")
+        self.assertEqual(cat("BONITAS MEDICAL AID"), "Medical & health")
 
     def test_member_scope(self):
         import_statement(self.conn, self.hid, FNB, member_id=self.v, account_label="FNB")
@@ -110,13 +110,13 @@ class StatementTests(Base):
 
     def test_override_rule_is_per_household(self):
         import_statement(self.conn, self.hid, FNB, member_id=self.v, account_label="FNB")
-        tid = self.conn.execute("SELECT id FROM transactions WHERE merchant = 'LITTLE GECKO TRADING'").fetchone()[0]
+        tid = self.conn.execute("SELECT id FROM transactions WHERE merchant = 'LANTERN AND QUILL'").fetchone()[0]
         self.assertEqual(set_category(self.conn, self.hid, tid, "Shopping")["updated"], 3)
         with self.conn:
             other = auth.create_household(self.conn, "Other", ["X"])
         import_statement(self.conn, other, FNB, account_label="FNB")
         cats = {r[0] for r in self.conn.execute(
-            "SELECT category FROM transactions WHERE household_id = ? AND merchant = 'LITTLE GECKO TRADING'", (other,))}
+            "SELECT category FROM transactions WHERE household_id = ? AND merchant = 'LANTERN AND QUILL'", (other,))}
         self.assertEqual(cats, {"Other"})
 
     def test_advice_still_works(self):
