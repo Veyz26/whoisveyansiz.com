@@ -28,11 +28,12 @@ const description =
   "Veyansiz Chetty is a Platform Engineer at Capitec in Gauteng, specialising in site reliability and DevOps, with over seven years in infrastructure, automation and operations.";
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://whoisveyansiz.com"),
   title: "Veyansiz Chetty — Platform Engineer, SRE and DevOps",
   description,
   keywords: ["Platform Engineer", "Site Reliability Engineering", "SRE", "DevOps Engineer", "Cloud Engineer", "Systems Engineer", "Azure", "Kubernetes", "CI/CD", "Veyansiz Chetty"],
   authors: [{ name: "Veyansiz Chetty" }],
-  openGraph: { title: "Veyansiz Chetty — Platform Engineer, SRE and DevOps", description, type: "website", locale: "en_ZA" },
+  openGraph: { title: "Veyansiz Chetty — Platform Engineer, SRE and DevOps", description, type: "website", locale: "en_ZA", url: "/" },
   twitter: { card: "summary_large_image", title: "Veyansiz Chetty — Platform Engineer, SRE and DevOps", description },
   robots: { index: true, follow: true },
 };
@@ -55,6 +56,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
               "@context": "https://schema.org",
               "@type": "Person",
               name: cvData.personal.name,
+              url: "https://whoisveyansiz.com/",
               jobTitle: cvData.personal.title,
               worksFor: { "@type": "Organization", name: cvData.experience[0].company },
               knowsAbout: ["Site Reliability Engineering", "DevOps", "Microsoft Azure", "AWS", "Linux", "CI/CD", "Ansible", "Incident Management", "Disaster Recovery"],

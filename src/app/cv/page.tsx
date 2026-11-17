@@ -3,6 +3,7 @@ import { CvDocument, CvToolbar } from "@/components/cv/CvDocument";
 
 export const metadata: Metadata = {
   title: "CV — Veyansiz Chetty",
+  openGraph: { title: "CV — Veyansiz Chetty", type: "profile", locale: "en_ZA", url: "/cv/" },
   description: "The full CV of Veyansiz Chetty, Platform Engineer specialising in site reliability and DevOps.",
 };
 
