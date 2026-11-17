@@ -7,7 +7,7 @@
 //   3. copies the export from wherever Next says it wrote it, or failing that, assembles out/
 //      from the pages Next prerendered into .next/ (this site is fully static).
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 
 const OUT = "out";
 const NEXT = ".next";
@@ -50,14 +50,28 @@ if (!existsSync(join(app, "index.html")) || !existsSync(join(NEXT, "static"))) {
 mkdirSync(OUT, { recursive: true });
 cpSync("public", OUT, { recursive: true }); // robots.txt, sitemap.xml, .htaccess
 cpSync(join(NEXT, "static"), join(OUT, "_next", "static"), { recursive: true });
-cpSync(join(app, "index.html"), join(OUT, "index.html"));
-if (existsSync(join(app, "index.rsc"))) cpSync(join(app, "index.rsc"), join(OUT, "index.txt"));
-// Route data for client navigation: index.segments/_tree.segment.rsc -> __next._tree.txt, etc.
-const segments = join(app, "index.segments");
-if (existsSync(segments)) {
-  for (const f of readdirSync(segments).filter((f) => f.endsWith(".segment.rsc"))) {
-    cpSync(join(segments, f), join(OUT, `__next.${f.replace(".segment.rsc", "")}.txt`));
+// Every prerendered page, as `next export` lays it out with trailingSlash: <route>.html -> <route>/index.html,
+// its RSC payload -> <route>/index.txt, and its segments (<route>.segments/a/b.segment.rsc) ->
+// <route>/__next.a.b.txt for client-side navigation.
+const SKIP = new Set(["_not-found", "_global-error"]);
+const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+  e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)]);
+for (const file of walk(app).filter((f) => f.endsWith(".html"))) {
+  const route = relative(app, file).replace(/\.html$/, "");
+  if (SKIP.has(route)) continue;
+  const dest = route === "index" ? OUT : join(OUT, route);
+  mkdirSync(dest, { recursive: true });
+  cpSync(file, join(dest, "index.html"));
+  const rsc = join(app, `${route}.rsc`);
+  if (existsSync(rsc)) cpSync(rsc, join(dest, "index.txt"));
+  const segs = join(app, `${route}.segments`);
+  if (existsSync(segs)) {
+    for (const f of walk(segs).filter((f) => f.endsWith(".segment.rsc"))) {
+      const name = relative(segs, f).replace(/\.segment\.rsc$/, "").split(sep).join(".");
+      cpSync(f, join(dest, `__next.${name}.txt`));
+    }
   }
+  console.log(`ensure-out: page /${route === "index" ? "" : `${route}/`}`);
 }
 if (existsSync(join(app, "_not-found.html"))) {
   for (const page of ["404.html", "404/index.html", "_not-found/index.html"]) {
