@@ -7,8 +7,8 @@ import { ChevronDown, FileDown } from "lucide-react";
 // <details>, so it works with the keyboard and without JavaScript; the script only closes it on a click
 // elsewhere or Escape.
 const CVS = [
-  { href: "/resume/Veyansiz-Chetty-CV-one-page.pdf", label: "One-page CV", note: "PDF, 1 page" },
-  { href: "/resume/Veyansiz-Chetty-CV.pdf", label: "Full CV", note: "PDF, 2 pages" },
+  { href: "/cv/Veyansiz-Chetty-CV-one-page.pdf", label: "One-page CV", note: "PDF, 1 page" },
+  { href: "/cv/Veyansiz-Chetty-CV.pdf", label: "Full CV", note: "PDF, 2 pages" },
 ];
 
 export function CvButton() {

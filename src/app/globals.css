@@ -176,7 +176,7 @@
   .map-label { transition: none; }
 }
 
-/* The CV pages (/resume/ and /resume/one-page/): an A4 sheet on screen, and exactly the sheet when printed. */
+/* The CV pages (/cv/ and /cv/one-page/): an A4 sheet on screen, and exactly the sheet when printed. */
 .cv-page { min-height: 100svh; padding: 0 16px 48px; background: var(--color-space); }
 .cv-toolbar { max-width: 210mm; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 0; font-size: 14px; }
 .cv-toolbar a:not(.btn-primary) { color: var(--color-bone); text-decoration: underline; text-underline-offset: 4px; text-decoration-color: rgba(238, 240, 251, 0.35); }

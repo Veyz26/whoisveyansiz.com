@@ -54,8 +54,8 @@ export function ContactTerminal({ live, compact = false, fill = false, headingId
           <div className="mt-5 flex flex-wrap gap-4">
             <a className={link} href={cvData.personal.linkedin} target="_blank" rel="noopener noreferrer">LinkedIn</a>
             <a className={link} href={cvData.personal.github} target="_blank" rel="noopener noreferrer">GitHub</a>
-            <a className={link} href="/resume/Veyansiz-Chetty-CV-one-page.pdf" download>CV, one page</a>
-            <a className={link} href="/resume/Veyansiz-Chetty-CV.pdf" download>CV, full</a>
+            <a className={link} href="/cv/Veyansiz-Chetty-CV-one-page.pdf" download>CV, one page</a>
+            <a className={link} href="/cv/Veyansiz-Chetty-CV.pdf" download>CV, full</a>
           </div>
           <p className="mt-5 text-xs text-slate">{cvData.personal.location}, South Africa</p>
         </div>
