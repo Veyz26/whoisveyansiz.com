@@ -54,7 +54,8 @@ key, email address or phone number.
 - **CV PDFs.** `/cv/` and `/cv/one-page/` render the CV from `src/data/cv.ts`, the same data as the site.
   After `next build`, `scripts/make-cv-pdfs.mjs` prints both to `out/cv/*.pdf` with headless Chrome, so the
   PDFs always match the site. Chrome is preinstalled on GitHub's runners; locally it uses Google Chrome
-  (or `CHROME_PATH`). Phone and email stay out of both, as on the site.
+  (or `CHROME_PATH`). Hostinger's own build has no Chrome, so copies are committed in `public/cv/`: after
+  changing the CV, run `npm run cv:pdf` and commit them. Phone and email stay out of both, as on the site.
 - **Sound.** Music and effects are synthesised in the browser (`src/components/site/sound.ts`), so there
   are no audio files or licences. Sound is off until the visitor turns it on with the speaker button.
 

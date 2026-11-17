@@ -1,12 +1,14 @@
 // Prints the CV pages (out/cv/ and out/cv/one-page/) to PDF with headless Chrome, after `next build`.
-// The site links to the PDFs, so CI must have Chrome (GitHub's ubuntu runners do) and the deploy workflow
-// checks they exist. Locally, a missing Chrome only warns. Set CHROME_PATH to point at a specific browser.
+// Builds without Chrome (Hostinger's own build) keep the copies committed in public/cv/, which `next build`
+// copies into out/cv/; so after changing the CV, refresh those with `npm run cv:pdf` and commit them.
+// Set CHROME_PATH to point at a specific browser.
 import { spawn } from "node:child_process";
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { copyFileSync, createReadStream, existsSync, mkdirSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, resolve } from "node:path";
 
 const OUT = resolve("out");
+const UPDATE_PUBLIC = process.argv.includes("--update-public");
 const PAGES = [
   ["cv/", "cv/Veyansiz-Chetty-CV.pdf"],
   ["cv/one-page/", "cv/Veyansiz-Chetty-CV-one-page.pdf"],
@@ -18,7 +20,7 @@ const CANDIDATES = [
 ].filter(Boolean);
 const chrome = CANDIDATES.find((p) => existsSync(p));
 if (!chrome) {
-  console.warn("make-cv-pdfs: no Chrome found (set CHROME_PATH); the CV PDFs were not made");
+  console.warn("make-cv-pdfs: no Chrome found (set CHROME_PATH); using the PDFs committed in public/cv/");
   process.exit(0);
 }
 
@@ -46,7 +48,14 @@ for (const [page, pdf] of PAGES) {
     p.on("exit", (code) => done(code));
   });
   if (run !== 0 || !existsSync(target)) { failed = true; console.error(`make-cv-pdfs: failed to print ${page}`); }
-  else console.log(`make-cv-pdfs: ${pdf} (${Math.round(statSync(target).size / 1024)} KB)`);
+  else {
+    console.log(`make-cv-pdfs: ${pdf} (${Math.round(statSync(target).size / 1024)} KB)`);
+    if (UPDATE_PUBLIC) {
+      mkdirSync(resolve("public", "cv"), { recursive: true });
+      copyFileSync(target, resolve("public", pdf));
+      console.log(`make-cv-pdfs: refreshed public/${pdf}`);
+    }
+  }
 }
 server.close();
 process.exit(failed ? 1 : 0);
