@@ -36,7 +36,7 @@ jobs:
       - name: Check the build
         run: |
           for f in out/index.html out/.htaccess out/private/index.php out/private/.htaccess out/private/app/.htaccess \
-                   out/cv/Veyansiz-Chetty-CV.pdf out/cv/Veyansiz-Chetty-CV-one-page.pdf; do
+                   out/resume/Veyansiz-Chetty-CV.pdf out/resume/Veyansiz-Chetty-CV-one-page.pdf; do
             test -f "$f" || { echo "missing $f"; exit 1; }
           done
           if find out -name 'config.php' -o -name '*.db' -o -name '*.log' | grep -q .; then

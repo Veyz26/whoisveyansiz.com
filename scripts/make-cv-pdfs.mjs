@@ -1,4 +1,4 @@
-// Prints the CV pages (out/cv/ and out/cv/one-page/) to PDF with headless Chrome, after `next build`.
+// Prints the CV pages (out/resume/ and out/resume/one-page/) to PDF with headless Chrome, after `next build`.
 // The site links to the PDFs, so CI must have Chrome (GitHub's ubuntu runners do) and the deploy workflow
 // checks they exist. Locally, a missing Chrome only warns. Set CHROME_PATH to point at a specific browser.
 import { spawn } from "node:child_process";
@@ -8,8 +8,8 @@ import { extname, join, resolve } from "node:path";
 
 const OUT = resolve("out");
 const PAGES = [
-  ["cv/", "cv/Veyansiz-Chetty-CV.pdf"],
-  ["cv/one-page/", "cv/Veyansiz-Chetty-CV-one-page.pdf"],
+  ["resume/", "resume/Veyansiz-Chetty-CV.pdf"],
+  ["resume/one-page/", "resume/Veyansiz-Chetty-CV-one-page.pdf"],
 ];
 const CANDIDATES = [
   process.env.CHROME_PATH,

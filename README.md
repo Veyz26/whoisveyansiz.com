@@ -51,8 +51,8 @@ key, email address or phone number.
 
 ## CV downloads and sound
 
-- **CV PDFs.** `/cv/` and `/cv/one-page/` render the CV from `src/data/cv.ts`, the same data as the site.
-  After `next build`, `scripts/make-cv-pdfs.mjs` prints both to `out/cv/*.pdf` with headless Chrome, so the
+- **CV PDFs.** `/resume/` and `/resume/one-page/` render the CV from `src/data/cv.ts`, the same data as the site.
+  After `next build`, `scripts/make-cv-pdfs.mjs` prints both to `out/resume/*.pdf` with headless Chrome, so the
   PDFs always match the site. Chrome is preinstalled on GitHub's runners; locally it uses Google Chrome
   (or `CHROME_PATH`). Phone and email stay out of both, as on the site.
 - **Sound.** Music and effects are synthesised in the browser (`src/components/site/sound.ts`), so there

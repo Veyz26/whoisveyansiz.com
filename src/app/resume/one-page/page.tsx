@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 export default function OnePageCv() {
   return (
     <div className="cv-page">
-      <CvToolbar pdf="/cv/Veyansiz-Chetty-CV-one-page.pdf" other={{ href: "/cv/", label: "Full version" }} />
+      <CvToolbar pdf="/resume/Veyansiz-Chetty-CV-one-page.pdf" other={{ href: "/resume/", label: "Full version" }} />
       <CvDocument variant="one-page" />
     </div>
   );
