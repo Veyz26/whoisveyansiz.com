@@ -3,4 +3,4 @@ Allow: /
 Disallow: /private/
 Disallow: /budget/
 
-Sitemap: https://veyansiz.dev/sitemap.xml
+Sitemap: https://whoisveyansiz.com/sitemap.xml
