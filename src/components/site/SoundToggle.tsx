@@ -33,7 +33,7 @@ export function SoundToggle() {
   return (
     <button type="button" data-sound-toggle onClick={() => sound?.toggle()} aria-pressed={on}
       aria-label={on ? "Turn sound off" : "Turn sound on (music and effects)"} title={on ? "Sound on" : "Sound off"}
-      className="flex h-11 w-11 items-center justify-center rounded-md border border-line text-bone/75 transition-colors hover:text-bone">
+      className="flex h-11 w-10 items-center sm:w-11 justify-center rounded-md border border-line text-bone/75 transition-colors hover:text-bone">
       {on ? <Volume2 size={17} /> : <VolumeX size={17} />}
     </button>
   );
